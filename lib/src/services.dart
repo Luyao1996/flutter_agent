@@ -1,0 +1,227 @@
+// 平台能力：图片压缩、朗读、语音输入、选文件/拍照、剪贴板里的图片和文件、保存和分享
+// 都包一层，出错一律变成给用户看的中文提示
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_tts/flutter_tts.dart';
+import 'package:image/image.dart' as img;
+import 'package:image_picker/image_picker.dart';
+import 'package:pasteboard/pasteboard.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:speech_to_text/speech_to_text.dart';
+
+bool get isDesktopPlatform => !kIsWeb && (Platform.isWindows || Platform.isMacOS || Platform.isLinux);
+bool get isMobilePlatform => !kIsWeb && (Platform.isIOS || Platform.isAndroid);
+
+// ---------- 图片：超过 2000 像素或 1.5 MB 时缩小，压成 JPG（动图不动） ----------
+({Uint8List bytes, String name}) _shrink(({Uint8List bytes, String name}) a) {
+  final src = img.decodeImage(a.bytes);
+  if (src == null) return a;
+  final longest = src.width > src.height ? src.width : src.height;
+  if (longest <= 2000 && a.bytes.length <= 1.5 * 1024 * 1024) return a;
+  final scaled = longest > 2000 ? img.copyResize(src, width: src.width >= src.height ? 2000 : null, height: src.height > src.width ? 2000 : null) : src;
+  // 透明的地方铺白底
+  final flat = img.Image(width: scaled.width, height: scaled.height)..clear(img.ColorRgb8(255, 255, 255));
+  img.compositeImage(flat, scaled);
+  final name = a.name.contains('.') ? '${a.name.substring(0, a.name.lastIndexOf('.'))}.jpg' : '${a.name}.jpg';
+  return (bytes: Uint8List.fromList(img.encodeJpg(flat, quality: 85)), name: name);
+}
+
+Future<({Uint8List bytes, String name})> shrinkImage(Uint8List bytes, String name) => compute(_shrink, (bytes: bytes, name: name));
+
+// ---------- 选文件、拍照、相册 ----------
+typedef PickedFile = ({Uint8List bytes, String name});
+
+const allowedExtensions = [
+  'png',
+  'jpg',
+  'jpeg',
+  'webp',
+  'gif',
+  'pdf',
+  'txt',
+  'md',
+  'log',
+  'csv',
+  'tsv',
+  'json',
+  'ini',
+  'cfg',
+  'conf',
+  'inf',
+  'xml',
+  'yaml',
+  'yml',
+  'bat',
+  'cmd',
+  'ps1',
+  'vbs',
+  'reg',
+  'sh',
+  'py',
+  'sql',
+  'html',
+  'htm',
+  'docx',
+  'xlsx',
+  'pptx',
+  'doc',
+  'xls',
+  'ppt'
+];
+
+Future<List<PickedFile>> pickFiles() async {
+  final list = await FilePicker.pickFiles(type: FileType.custom, allowedExtensions: allowedExtensions);
+  return [for (final f in list) (bytes: await f.xFile.readAsBytes(), name: f.name)];
+}
+
+/// 选 md / txt 文件（知识库背景知识、技能上传用），返回文件名和文字
+Future<List<({String name, String text})>> pickTextFiles() async {
+  final list = await FilePicker.pickFiles(type: FileType.custom, allowedExtensions: const ['md', 'markdown', 'txt']);
+  return [for (final f in list) (name: f.name, text: await f.xFile.readAsString())];
+}
+
+/// 手机上拍照或从相册选（相册可以多选）；图片在这一步就先压小
+Future<List<PickedFile>> pickImages({required bool camera}) async {
+  final picker = ImagePicker();
+  final files = camera
+      ? [await picker.pickImage(source: ImageSource.camera, maxWidth: 2000, maxHeight: 2000, imageQuality: 85)].whereType<XFile>().toList()
+      : await picker.pickMultiImage(maxWidth: 2000, maxHeight: 2000, imageQuality: 85);
+  return [for (final f in files) (bytes: await f.readAsBytes(), name: f.name)];
+}
+
+// ---------- 剪贴板（Windows 上 Ctrl+V 粘贴截图、从资源管理器复制的文件） ----------
+/// 剪贴板里有文件就返回文件，有图片就返回图片，都没有返回空
+Future<List<PickedFile>> readClipboardFiles() async {
+  try {
+    final paths = await Pasteboard.files();
+    if (paths.isNotEmpty) return [for (final p in paths) (bytes: await File(p).readAsBytes(), name: p.split(RegExp(r'[\\/]')).last)];
+    final image = await Pasteboard.image;
+    if (image != null && image.isNotEmpty) return [(bytes: image, name: '')];
+  } catch (_) {}
+  return [];
+}
+
+Future<String?> readClipboardText() async => (await Clipboard.getData(Clipboard.kTextPlain))?.text;
+
+// ---------- 复制、保存、分享 ----------
+Future<void> copyText(String text) => Clipboard.setData(ClipboardData(text: text));
+
+/// 保存附件：电脑上弹出“另存为”，手机上用系统分享（存到文件、发给别人）
+Future<bool> saveFile(Uint8List bytes, String name) async {
+  if (isDesktopPlatform) return await FilePicker.saveFile(fileName: name, bytes: bytes) != null;
+  final r = await SharePlus.instance.share(ShareParams(files: [XFile.fromData(bytes, name: name)], fileNameOverrides: [name]));
+  return r.status == ShareResultStatus.success;
+}
+
+/// 手机上用系统分享面板发链接
+Future<void> shareText(String text, {String? subject, Rect? origin}) => SharePlus.instance.share(ShareParams(text: text, subject: subject, sharePositionOrigin: origin));
+
+// ---------- 朗读：系统自带的语音合成，同一时间只读一条 ----------
+class Reader {
+  final FlutterTts _tts = FlutterTts();
+  bool _ready = false;
+  VoidCallback? _onDone;
+
+  /// 去掉 Markdown 符号和代码块，读起来顺一些
+  static String plainText(String text) => text
+      .replaceAll(RegExp(r'```[\s\S]*?```'), '（代码略）')
+      .replaceAllMapped(RegExp(r'`([^`\n]+)`'), (m) => m.group(1)!)
+      .replaceAll(RegExp(r'^\s*\|?[\s:|-]+\|?\s*$', multiLine: true), '')
+      .replaceAll('|', '，')
+      .replaceAll(RegExp(r'^#{1,6}\s+', multiLine: true), '')
+      .replaceAllMapped(RegExp(r'\*\*([^*\n]+)\*\*'), (m) => m.group(1)!)
+      .replaceAll(RegExp(r'^\s*([-*]|>)\s+', multiLine: true), '')
+      .replaceAll(RegExp(r'<[^>]+>'), '')
+      .replaceAll(RegExp(r'\n{2,}'), '\n')
+      .trim();
+
+  Future<void> _init() async {
+    if (_ready) return;
+    _ready = true;
+    await _tts.setLanguage('zh-CN');
+    await _tts.awaitSpeakCompletion(true);
+    _tts.setCompletionHandler(() => _onDone?.call());
+    _tts.setCancelHandler(() => _onDone?.call());
+    _tts.setErrorHandler((_) => _onDone?.call());
+  }
+
+  /// 开始朗读，读完或被停止时调用 onDone；失败抛出中文提示
+  Future<void> speak(String text, VoidCallback onDone) async {
+    await stop();
+    final t = plainText(text);
+    if (t.isEmpty) return onDone();
+    try {
+      await _init();
+      _onDone = onDone;
+      await _tts.speak(t);
+    } catch (_) {
+      _onDone = null;
+      onDone();
+      throw Exception('朗读失败：这台设备的语音合成用不了');
+    }
+  }
+
+  Future<void> stop() async {
+    final done = _onDone;
+    _onDone = null;
+    try {
+      await _tts.stop();
+    } catch (_) {}
+    done?.call();
+  }
+}
+
+// ---------- 语音输入：系统自带的语音识别，结果插到光标处，不自动发送 ----------
+class Dictation {
+  final SpeechToText _stt = SpeechToText();
+  bool _inited = false, _available = false;
+  bool get listening => _stt.isListening;
+
+  static const _errors = {
+    'error_network': '语音识别连不上服务器，请检查网络后再试。',
+    'error_network_timeout': '语音识别连不上服务器，请检查网络后再试。',
+    'error_no_match': '没有听清，请靠近麦克风再说一次。',
+    'error_speech_timeout': '没有听到说话声，请靠近麦克风再试一次。',
+    'error_audio_error': '没有找到麦克风，请检查麦克风是否可用。',
+    'error_permission': '没有麦克风权限：请在系统设置里允许这个应用使用麦克风和语音识别。',
+    'error_insufficient_permissions': '没有麦克风权限：请在系统设置里允许这个应用使用麦克风和语音识别。',
+    'error_server_disconnected': '语音识别服务断开了，请再试一次。',
+    'error_language_not_supported': '这台设备不支持中文语音识别。',
+    'error_language_unavailable': '这台设备没有安装中文语音识别，请在系统设置里添加中文语言。',
+  };
+
+  /// 开始听：onPartial 实时给出正在识别的文字，onFinal 给出确定的一句，onEnd 结束（带出错原因或 null）
+  Future<void> start({required void Function(String) onPartial, required void Function(String) onFinal, required void Function(String? error) onEnd}) async {
+    String? error;
+    if (!_inited) {
+      _inited = true;
+      try {
+        _available = await _stt.initialize(
+          onError: (e) => error = _errors[e.errorMsg] ?? '语音识别出错了（${e.errorMsg}），可以再试一次。',
+          onStatus: (s) {
+            if (s == 'done' || s == 'notListening') onEnd(error);
+          },
+        );
+      } catch (_) {
+        _available = false;
+      }
+    }
+    if (!_available) {
+      _inited = false;
+      return onEnd(Platform.isAndroid ? '这台手机没有可用的语音识别服务（很多国产手机需要安装或打开系统自带的语音识别），也可能是没有给麦克风权限。' : '当前设备不支持语音输入，或者没有给麦克风和语音识别权限。');
+    }
+    await _stt.listen(
+      listenOptions: SpeechListenOptions(localeId: 'zh_CN', partialResults: true, cancelOnError: true, listenMode: ListenMode.dictation, autoPunctuation: true),
+      onResult: (r) => r.finalResult ? onFinal(r.recognizedWords) : onPartial(r.recognizedWords),
+    );
+  }
+
+  Future<void> stop() async {
+    try {
+      await _stt.stop();
+    } catch (_) {}
+  }
+}
