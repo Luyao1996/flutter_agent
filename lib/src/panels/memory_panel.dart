@@ -109,7 +109,7 @@ class _MemoryPanelState extends State<MemoryPanel> {
           margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-              color: NetbarColors.warn.withValues(alpha: .08), border: Border.all(color: NetbarColors.warn.withValues(alpha: .3)), borderRadius: BorderRadius.circular(8)),
+              color: NT.warn.withValues(alpha: .08), border: Border.all(color: NT.warn.withValues(alpha: .3)), borderRadius: BorderRadius.circular(8)),
           child: Text('网吧记忆不可用：没有网吧名称，现在只能使用这台机器的记忆。', style: TextStyle(fontSize: 12, color: c.warnText)),
         ),
       Padding(

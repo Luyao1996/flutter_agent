@@ -23,7 +23,6 @@ class Composer extends StatefulWidget {
 
 class _ComposerState extends State<Composer> {
   final _focus = FocusNode();
-  final _skillKey = GlobalKey();
   String _interim = '';
   bool _recording = false;
   String _prevText = '';
@@ -112,7 +111,7 @@ class _ComposerState extends State<Composer> {
     if (text == null || text.isEmpty) {
       final files = await readClipboardFiles();
       for (final f in files) {
-        ctl.addFile(f.bytes, f.name, screenshot: f.name.isEmpty);
+        _addPicked(f, screenshot: f.name.isEmpty);
       }
       return;
     }
@@ -120,11 +119,19 @@ class _ComposerState extends State<Composer> {
     ctl.insertText(text);
   }
 
-  // ---------- 附件、语音、技能 ----------
+  // ---------- 附件、语音、技能、AI ----------
+  /// 选好的文件加进附件；太大没读进来的显示成失败卡片
+  void _addPicked(PickedFile f, {bool screenshot = false}) {
+    final b = f.bytes;
+    if (b == null) return _ctl!.addOversized(f.name, f.size);
+    _ctl!.addFile(b, f.name, screenshot: screenshot);
+  }
+
   Future<void> _pick(Future<List<PickedFile>> Function() picker) async {
     try {
       for (final f in await picker()) {
-        _ctl!.addFile(f.bytes, f.name);
+        if (!mounted) return;
+        _addPicked(f);
       }
     } catch (e) {
       if (mounted) showToast(context, '没能选择文件：可能是没有给相册或相机权限');
@@ -139,8 +146,11 @@ class _ComposerState extends State<Composer> {
       _interim = '正在打开麦克风…';
     });
     await s.dictation.start(
-      onPartial: (t) => setState(() => _interim = t),
+      onPartial: (t) {
+        if (mounted) setState(() => _interim = t);
+      },
       onFinal: (t) {
+        if (!mounted) return;
         if (t.isNotEmpty) _ctl!.insertText(t);
         setState(() => _interim = '');
       },
@@ -155,7 +165,7 @@ class _ComposerState extends State<Composer> {
     );
   }
 
-  Future<void> _skillMenu() async {
+  Future<void> _skillMenu([Rect? anchor]) async {
     final ctl = _ctl!;
     List<SkillItem> list;
     try {
@@ -165,20 +175,26 @@ class _ComposerState extends State<Composer> {
       return;
     }
     if (!mounted) return;
-    RelativeRect? anchor;
-    final box = _skillKey.currentContext?.findRenderObject() as RenderBox?;
-    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox?;
-    if (box != null && overlay != null) {
-      final p = box.localToGlobal(Offset.zero, ancestor: overlay);
-      anchor = RelativeRect.fromLTRB(p.dx, p.dy - 8 - 48.0 * (list.length + 1), overlay.size.width - p.dx - box.size.width, overlay.size.height - p.dy);
-    }
     final r = await actionSheet<String>(context, title: '选择要运行的技能', anchor: anchor, message: list.isEmpty ? '还没有可用的技能' : '输入框里的内容会作为补充说明一起发送', actions: [
-      for (final x in list) SheetAction(x.name, x.id, icon: Icons.auto_awesome_outlined, subtitle: x.description),
+      for (final x in list) SheetAction(x.name, x.id, icon: Icons.auto_awesome_outlined, subtitle: x.description.isEmpty ? null : x.description),
       const SheetAction('管理技能…', '', icon: Icons.tune),
     ]);
     if (r == null || !mounted) return;
     if (r.isEmpty) return openSkillsPanel(context);
     ctl.runSkill(list.firstWhere((x) => x.id == r));
+  }
+
+  /// 切换处理问题的 AI（Claude / Codex / DeepSeek），下一条消息开始生效
+  Future<void> _harnessMenu([Rect? anchor]) async {
+    final ctl = _ctl!;
+    if (ctl.harnesses.isEmpty) await ctl.loadHarnesses();
+    if (!mounted) return;
+    if (ctl.harnesses.isEmpty) return showToast(context, '没有取到可用的 AI 列表，请稍后再试');
+    final r = await actionSheet<String>(context, title: '处理问题的 AI', message: '切换后从下一条消息开始生效', anchor: anchor, actions: [
+      for (final h in ctl.harnesses)
+        SheetAction(h.name, h.id, enabled: h.available, checked: h.id == ctl.harnessId, subtitle: h.available ? h.desc : '这台服务器上没有安装或没有登录'),
+    ]);
+    if (r != null && mounted) ctl.setHarness(r);
   }
 
   /// 手机上的“＋”菜单
@@ -191,6 +207,7 @@ class _ComposerState extends State<Composer> {
       const SheetAction('推荐知识库内容或技能（@）', 'at', icon: Icons.alternate_email),
       const SheetAction('运行技能…', 'skill', icon: Icons.auto_awesome_outlined),
       SheetAction('总结经验到知识库', 'summarize', icon: Icons.summarize_outlined, enabled: ctl.sessionId != null && !ctl.busy),
+      if (ctl.harnesses.length > 1) SheetAction('切换 AI（现在是 ${ctl.harness?.name ?? '默认'}）', 'harness', icon: Icons.swap_horiz),
     ]);
     if (!mounted) return;
     switch (r) {
@@ -207,6 +224,8 @@ class _ComposerState extends State<Composer> {
         _skillMenu();
       case 'summarize':
         ctl.summarize();
+      case 'harness':
+        _harnessMenu();
     }
   }
 
@@ -221,9 +240,9 @@ class _ComposerState extends State<Composer> {
       if (ctl.files.isNotEmpty) Wrap(spacing: 6, runSpacing: 6, children: [for (final f in ctl.files) PendingFileCard(f, key: ValueKey(f.key))]),
       if (_recording)
         Row(children: [
-          Container(width: 8, height: 8, decoration: const BoxDecoration(color: NetbarColors.danger, shape: BoxShape.circle)),
+          const _RecDot(),
           const SizedBox(width: 8),
-          Expanded(child: Text(_interim.isEmpty ? '正在听，请说话…' : _interim, style: TextStyle(fontSize: 12.5, color: c.muted))),
+          Expanded(child: Text(_interim.isEmpty ? '正在听，请说话…' : _interim, maxLines: 3, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: NT.fSmall, color: c.muted))),
         ]),
     ];
     final top = <Widget>[
@@ -243,6 +262,8 @@ class _ComposerState extends State<Composer> {
   // ---------- 电脑 ----------
   Widget _desktop(BuildContext context, ChatController ctl, List<Widget> extras, List<Widget> top) {
     final c = NetbarColors(context);
+    // 明确写出每一种边框，宿主应用的输入框主题（外框、底色、内边距）不会漏进来
+    const none = InputBorder.none;
     final field = Focus(
       onKeyEvent: _onKey,
       child: TextField(
@@ -252,62 +273,103 @@ class _ComposerState extends State<Composer> {
         minLines: 1,
         maxLines: 8,
         enabled: ctl.config.isValid,
-        style: const TextStyle(fontSize: 14, height: 1.5),
-        decoration: InputDecoration(hintText: ctl.placeholder, border: InputBorder.none, isDense: true, contentPadding: const EdgeInsets.symmetric(vertical: 4)),
+        style: TextStyle(fontSize: NT.fBody, height: 1.5, color: c.text),
+        cursorColor: NT.accent,
+        decoration: InputDecoration(
+          hintText: ctl.placeholder,
+          hintStyle: TextStyle(color: c.muted, fontSize: NT.fBody),
+          hintMaxLines: 2,
+          filled: false,
+          isDense: true,
+          counterText: '',
+          contentPadding: const EdgeInsets.symmetric(vertical: 4),
+          border: none,
+          enabledBorder: none,
+          focusedBorder: none,
+          disabledBorder: none,
+          errorBorder: none,
+          focusedErrorBorder: none,
+        ),
       ),
     );
-    return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      ...top.map((w) => Padding(padding: const EdgeInsets.only(bottom: 8), child: w)),
-      _FocusCard(
-        focus: _focus,
-        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
-          for (final w in extras) Padding(padding: const EdgeInsets.only(bottom: 6), child: w),
-          field,
-          const SizedBox(height: 4),
-          Row(children: [
-            AIconButton(icon: Icons.attach_file, tooltip: '添加附件（图片、PDF、文本、Word/Excel/PPT）', onPressed: () => _pick(pickFiles)),
-            AIconButton(
-                icon: _recording ? Icons.mic : Icons.mic_none, color: _recording ? NetbarColors.danger : null, tooltip: _recording ? '停止语音输入' : '语音输入', onPressed: _toggleVoice),
-            AIconButton(
-                icon: Icons.alternate_email,
-                tooltip: '推荐知识库里的经验、背景知识，或选一个技能运行（也可以直接输入 @）',
-                onPressed: () {
-                  ctl.insertAt();
-                  _focus.requestFocus();
-                }),
-            Container(width: 1, height: 16, margin: const EdgeInsets.symmetric(horizontal: 4), color: c.line),
-            TextButton.icon(
-                key: _skillKey,
-                onPressed: _skillMenu,
-                icon: const Icon(Icons.auto_awesome_outlined, size: 16),
-                label: const Text('技能'),
-                style: TextButton.styleFrom(foregroundColor: c.muted, visualDensity: VisualDensity.compact)),
-            TextButton.icon(
-                onPressed: ctl.sessionId == null || ctl.busy ? null : ctl.summarize,
-                icon: const Icon(Icons.summarize_outlined, size: 16),
-                label: const Text('总结'),
-                style: TextButton.styleFrom(foregroundColor: c.muted, visualDensity: VisualDensity.compact)),
-            const Spacer(),
-            if (ctl.busy) ...[_RoundButton(stop: true, tooltip: '停止', onPressed: ctl.stopByUser), const SizedBox(width: 6)],
-            _RoundButton(tooltip: ctl.busy ? '排队发送：AI 正在处理，这一轮结束后接着处理' : '发送（Enter）', queueing: ctl.busy, onPressed: ctl.config.isValid ? ctl.sendComposer : null),
+    return LayoutBuilder(builder: (context, box) {
+      final w = box.maxWidth;
+      // 窄的时候“技能”“总结”“AI”只留图标，底部提示只留最重要的一句
+      final compact = w < 640;
+      final h = ctl.harness;
+      return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        ...top.map((w) => Padding(padding: const EdgeInsets.only(bottom: 8), child: w)),
+        _FocusCard(
+          focus: _focus,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
+            for (final w in extras) Padding(padding: const EdgeInsets.only(bottom: 8), child: w),
+            field,
+            const SizedBox(height: 6),
+            Row(children: [
+              AIconButton(icon: Icons.attach_file, tooltip: '添加附件（图片、PDF、文本、Word/Excel/PPT）', onPressed: ctl.config.isValid ? () => _pick(pickFiles) : null),
+              AIconButton(
+                  icon: _recording ? Icons.mic : Icons.mic_none, color: _recording ? NT.danger : null, tooltip: _recording ? '停止语音输入' : '语音输入', onPressed: _toggleVoice),
+              AIconButton(
+                  icon: Icons.alternate_email,
+                  tooltip: '推荐知识库里的经验、背景知识，或选一个技能运行（也可以直接输入 @）',
+                  onPressed: () {
+                    ctl.insertAt();
+                    _focus.requestFocus();
+                  }),
+              Container(width: 1, height: 16, margin: const EdgeInsets.symmetric(horizontal: 6), color: c.line),
+              Builder(
+                  builder: (bctx) => _ToolButton(
+                      icon: Icons.auto_awesome_outlined, label: '技能', compact: compact, tooltip: '选一个技能运行', onPressed: () => _skillMenu(rectOf(bctx)))),
+              _ToolButton(
+                  icon: Icons.summarize_outlined,
+                  label: '总结',
+                  compact: compact,
+                  tooltip: '把这次的处理经验总结到知识库',
+                  onPressed: ctl.sessionId == null || ctl.busy ? null : ctl.summarize),
+              const Spacer(),
+              if (ctl.harnesses.isNotEmpty)
+                Builder(
+                    builder: (bctx) => _ToolButton(
+                        icon: Icons.memory_outlined,
+                        label: h?.name ?? 'AI',
+                        trailing: Icons.expand_more,
+                        compact: compact && w < 400,
+                        tooltip: '切换处理问题的 AI',
+                        onPressed: () => _harnessMenu(rectOf(bctx)))),
+              const SizedBox(width: 6),
+              if (ctl.busy) ...[_RoundButton(stop: true, tooltip: '停止', onPressed: ctl.stopByUser), const SizedBox(width: 6)],
+              _RoundButton(
+                  tooltip: ctl.busy ? '排队发送：AI 正在处理，这一轮结束后接着处理' : '发送（Enter）', queueing: ctl.busy, onPressed: ctl.config.isValid ? ctl.sendComposer : null),
+            ]),
           ]),
-        ]),
-      ),
-      Padding(
-        padding: const EdgeInsets.fromLTRB(4, 5, 4, 0),
-        child: Row(children: [
-          if (ctl.config.barKey.isEmpty) Flexible(child: Text('网吧记忆不可用（没有网吧名称），只使用这台机器的记忆', overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11, color: c.warnText))),
-          const Spacer(),
-          Text('Enter 发送 · Shift+Enter 换行 · 输入 @ 推荐知识或技能 · 可以粘贴截图、拖入文件', style: TextStyle(fontSize: 11, color: c.faint)),
-        ]),
-      ),
-    ]);
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(6, 6, 6, 0),
+          child: Row(children: [
+            if (ctl.config.barKey.isEmpty) ...[
+              Icon(Icons.info_outline, size: 12, color: c.warnText),
+              const SizedBox(width: 4),
+              Flexible(
+                  child: Text(compact ? '只使用这台机器的记忆' : '网吧记忆不可用（没有网吧名称），只使用这台机器的记忆',
+                      maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11.5, color: c.warnText))),
+              const SizedBox(width: 12),
+            ] else
+              const Spacer(),
+            Flexible(
+              child: Text(compact ? 'Enter 发送 · Shift+Enter 换行' : 'Enter 发送 · Shift+Enter 换行 · @ 推荐知识或技能 · 可粘贴截图、拖入文件',
+                  textAlign: TextAlign.right, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11.5, color: c.faint)),
+            ),
+          ]),
+        ),
+      ]);
+    });
   }
 
   // ---------- 手机 ----------
   Widget _mobile(BuildContext context, ChatController ctl, List<Widget> extras, List<Widget> top) {
     final s = NetbarScope.of(context);
     final c = NetbarColors(context);
+    final textStyle = TextStyle(fontSize: NT.fBodyMobile + 1, height: 1.35, color: c.text);
     final field = _contentInsert((cfg) => s.isCupertino
         ? CupertinoTextField(
             key: inputKey,
@@ -316,11 +378,17 @@ class _ComposerState extends State<Composer> {
             minLines: 1,
             maxLines: 6,
             enabled: ctl.config.isValid,
-            placeholder: ctl.placeholder,
+            placeholder: _shortHint(ctl.placeholder),
+            placeholderStyle: TextStyle(fontSize: NT.fBodyMobile + 1, color: CupertinoColors.placeholderText.resolveFrom(context)),
+            style: textStyle,
             contentInsertionConfiguration: cfg,
             textInputAction: TextInputAction.newline,
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-            decoration: BoxDecoration(color: CupertinoColors.tertiarySystemFill.resolveFrom(context), borderRadius: BorderRadius.circular(20)),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: BoxDecoration(
+              color: c.card,
+              border: Border.all(color: CupertinoColors.separator.resolveFrom(context)),
+              borderRadius: BorderRadius.circular(20),
+            ),
           )
         : TextField(
             key: inputKey,
@@ -329,42 +397,109 @@ class _ComposerState extends State<Composer> {
             minLines: 1,
             maxLines: 6,
             enabled: ctl.config.isValid,
+            style: textStyle,
             contentInsertionConfiguration: cfg,
             textInputAction: TextInputAction.newline,
             decoration: InputDecoration(
-              hintText: ctl.placeholder,
+              hintText: _shortHint(ctl.placeholder),
+              hintStyle: TextStyle(color: c.muted),
+              hintMaxLines: 1,
               filled: true,
-              fillColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+              fillColor: c.fill2,
               isDense: true,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+              counterText: '',
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none),
+              enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none),
+              disabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none),
+              focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide(color: NT.accent.withValues(alpha: .6), width: 1.5)),
             ),
           ));
     return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       ...top.map((w) => Padding(padding: const EdgeInsets.only(bottom: 8), child: w)),
-      for (final w in extras) Padding(padding: const EdgeInsets.only(bottom: 6, left: 4, right: 4), child: w),
+      for (final w in extras) Padding(padding: const EdgeInsets.only(bottom: 8, left: 4, right: 4), child: w),
       ValueListenableBuilder<TextEditingValue>(
         valueListenable: ctl.input,
         builder: (context, value, _) {
           final hasContent = value.text.trim().isNotEmpty || ctl.files.isNotEmpty || ctl.skill != null;
           return Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-            _CircleIcon(icon: s.isCupertino ? CupertinoIcons.add : Icons.add, tooltip: '添加', onPressed: ctl.config.isValid ? _plusMenu : null, filled: true),
-            const SizedBox(width: 8),
+            _CircleIcon(icon: s.isCupertino ? CupertinoIcons.add_circled : Icons.add_circle_outline, tooltip: '添加附件、技能、总结', onPressed: ctl.config.isValid ? _plusMenu : null),
+            const SizedBox(width: 4),
             Expanded(child: field),
-            const SizedBox(width: 8),
-            if (ctl.busy) ...[_RoundButton(stop: true, tooltip: '停止', onPressed: ctl.stopByUser, size: 38), if (hasContent) const SizedBox(width: 6)],
+            const SizedBox(width: 4),
+            if (ctl.busy) _RoundButton(stop: true, tooltip: '停止', onPressed: ctl.stopByUser, size: 34),
             if (hasContent)
-              _RoundButton(tooltip: ctl.busy ? '排队发送' : '发送', queueing: ctl.busy, onPressed: ctl.sendComposer, size: 38)
+              _RoundButton(tooltip: ctl.busy ? '排队发送' : '发送', queueing: ctl.busy, onPressed: ctl.sendComposer, size: 34)
             else if (!ctl.busy)
               _CircleIcon(
-                  icon: _recording ? Icons.stop : (s.isCupertino ? CupertinoIcons.mic : Icons.mic_none),
+                  icon: _recording ? (s.isCupertino ? CupertinoIcons.stop_circle : Icons.stop_circle_outlined) : (s.isCupertino ? CupertinoIcons.mic : Icons.mic_none),
                   tooltip: _recording ? '停止语音输入' : '语音输入',
-                  color: _recording ? NetbarColors.danger : c.muted,
+                  color: _recording ? NT.danger : null,
                   onPressed: ctl.config.isValid ? _toggleVoice : null),
           ]);
         },
       ),
     ]);
+  }
+}
+
+/// 手机输入框很窄：提示只留前半句（“描述遇到的问题，例如：……” → “描述遇到的问题”）
+String _shortHint(String s) => s.split(RegExp(r'[，,]\s*例如')).first;
+
+/// 录音中的红点（一闪一闪）
+class _RecDot extends StatefulWidget {
+  const _RecDot();
+  @override
+  State<_RecDot> createState() => _RecDotState();
+}
+
+class _RecDotState extends State<_RecDot> with SingleTickerProviderStateMixin {
+  late final AnimationController _a = AnimationController(vsync: this, duration: const Duration(milliseconds: 800))..repeat(reverse: true);
+  @override
+  void dispose() {
+    _a.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => FadeTransition(
+      opacity: Tween(begin: .35, end: 1.0).animate(_a),
+      child: Container(width: 8, height: 8, decoration: const BoxDecoration(color: NT.danger, shape: BoxShape.circle)));
+}
+
+/// 输入卡片工具栏里带文字的小按钮（窄的时候只显示图标）
+class _ToolButton extends StatelessWidget {
+  const _ToolButton({required this.icon, required this.label, required this.tooltip, required this.onPressed, this.compact = false, this.trailing});
+  final IconData icon;
+  final IconData? trailing;
+  final String label, tooltip;
+  final VoidCallback? onPressed;
+  final bool compact;
+  @override
+  Widget build(BuildContext context) {
+    final c = NetbarColors(context);
+    final col = onPressed == null ? c.faint : c.muted;
+    return Tooltip(
+      message: tooltip,
+      child: Pressable(
+        onTap: onPressed,
+        radius: 6,
+        label: compact ? label : null,
+        child: Container(
+          height: 30,
+          constraints: const BoxConstraints(minWidth: 30, maxWidth: 160),
+          padding: EdgeInsets.symmetric(horizontal: compact ? 7 : 8),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(icon, size: 16, color: col),
+            if (!compact) ...[
+              const SizedBox(width: 4),
+              Flexible(child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: NT.fSmall, color: col))),
+            ],
+            if (trailing != null) Icon(trailing, size: 14, color: col),
+          ]),
+        ),
+      ),
+    );
   }
 }
 
@@ -397,19 +532,21 @@ class _FocusCardState extends State<_FocusCard> {
     final on = widget.focus.hasFocus;
     return AnimatedContainer(
       duration: const Duration(milliseconds: 180),
-      padding: const EdgeInsets.fromLTRB(12, 10, 10, 6),
+      padding: const EdgeInsets.fromLTRB(14, 12, 10, 8),
       decoration: BoxDecoration(
-        color: c.bubble,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: on ? NetbarColors.accent.withValues(alpha: .6) : c.line),
-        boxShadow: on ? [BoxShadow(color: NetbarColors.accent.withValues(alpha: .15), spreadRadius: 3)] : null,
+        color: c.card,
+        borderRadius: BorderRadius.circular(NT.rLg),
+        border: Border.all(color: on ? NT.accent.withValues(alpha: .65) : c.line),
+        boxShadow: [
+          if (on) BoxShadow(color: NT.accent.withValues(alpha: .14), spreadRadius: 3) else BoxShadow(color: Colors.black.withValues(alpha: c.dark ? .25 : .05), blurRadius: 12, offset: const Offset(0, 2)),
+        ],
       ),
       child: widget.child,
     );
   }
 }
 
-/// 圆形的发送 / 停止按钮
+/// 圆形的发送 / 停止按钮：手机上点击区域 44（图标本身小一些），iOS 按下变淡，没有水波纹
 class _RoundButton extends StatelessWidget {
   const _RoundButton({required this.tooltip, required this.onPressed, this.stop = false, this.queueing = false, this.size = 32});
   final String tooltip;
@@ -421,44 +558,85 @@ class _RoundButton extends StatelessWidget {
     final s = NetbarScope.of(context);
     final c = NetbarColors(context);
     final bg = stop
-        ? NetbarColors.danger.withValues(alpha: .12)
+        ? NT.danger.withValues(alpha: .12)
         : queueing
-            ? NetbarColors.accent.withValues(alpha: .14)
-            : NetbarColors.accent;
+            ? NT.accent.withValues(alpha: .16)
+            : NT.accent;
     final fg = stop
         ? c.dangerText
         : queueing
             ? c.accentText
             : Colors.white;
-    final icon =
-        stop ? (s.isCupertino ? CupertinoIcons.stop_fill : Icons.stop_rounded) : (s.isMobile ? (s.isCupertino ? CupertinoIcons.arrow_up : Icons.arrow_upward) : Icons.send_rounded);
+    final icon = stop
+        ? (s.isCupertino ? CupertinoIcons.stop_fill : Icons.stop_rounded)
+        : queueing
+            ? (s.isCupertino ? CupertinoIcons.text_badge_plus : Icons.playlist_add)
+            : (s.isMobile ? (s.isCupertino ? CupertinoIcons.arrow_up : Icons.arrow_upward) : Icons.arrow_upward_rounded);
+    final disabled = onPressed == null;
+    final circle = Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: disabled ? c.fill : bg,
+        shape: BoxShape.circle,
+        border: stop ? Border.all(color: NT.danger.withValues(alpha: .4)) : null,
+      ),
+      child: Icon(icon, size: size * .55, color: disabled ? c.faint : fg),
+    );
+    final box = s.isMobile ? 44.0 : size;
+    if (s.isCupertino) {
+      return Semantics(
+          button: true,
+          label: tooltip,
+          child: CupertinoButton(padding: EdgeInsets.zero, minimumSize: Size(box, box), onPressed: onPressed, child: circle));
+    }
     return Tooltip(
       message: tooltip,
-      child: Material(
-        color: onPressed == null ? bg.withValues(alpha: .35) : bg,
-        shape: CircleBorder(side: stop ? BorderSide(color: NetbarColors.danger.withValues(alpha: .4)) : BorderSide.none),
-        child: InkWell(customBorder: const CircleBorder(), onTap: onPressed, child: SizedBox(width: size, height: size, child: Icon(icon, size: size * .5, color: fg))),
+      child: SizedBox(
+        width: box,
+        height: box,
+        child: Center(
+          child: Material(
+            type: MaterialType.transparency,
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: onPressed,
+              mouseCursor: disabled ? SystemMouseCursors.basic : SystemMouseCursors.click,
+              child: circle,
+            ),
+          ),
+        ),
       ),
     );
   }
 }
 
+/// 手机输入框两边的图标按钮（＋、麦克风），点击区域 44
 class _CircleIcon extends StatelessWidget {
-  const _CircleIcon({required this.icon, required this.tooltip, required this.onPressed, this.color, this.filled = false});
+  const _CircleIcon({required this.icon, required this.tooltip, required this.onPressed, this.color});
   final IconData icon;
   final String tooltip;
   final VoidCallback? onPressed;
   final Color? color;
-  final bool filled;
   @override
   Widget build(BuildContext context) {
+    final s = NetbarScope.of(context);
     final c = NetbarColors(context);
-    return Tooltip(
-      message: tooltip,
-      child: Material(
-        color: filled ? c.fill : Colors.transparent,
-        shape: const CircleBorder(),
-        child: InkWell(customBorder: const CircleBorder(), onTap: onPressed, child: SizedBox(width: 38, height: 38, child: Icon(icon, size: 22, color: color ?? c.muted))),
+    final col = onPressed == null ? c.faint : (color ?? c.muted);
+    if (s.isCupertino) {
+      return Semantics(
+          button: true,
+          label: tooltip,
+          child: CupertinoButton(padding: EdgeInsets.zero, minimumSize: const Size(44, 44), onPressed: onPressed, child: Icon(icon, size: 26, color: col)));
+    }
+    return IconButton(
+      tooltip: tooltip,
+      onPressed: onPressed,
+      icon: Icon(icon, size: 24, color: col),
+      style: const ButtonStyle(
+        minimumSize: WidgetStatePropertyAll(Size(44, 44)),
+        padding: WidgetStatePropertyAll(EdgeInsets.zero),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       ),
     );
   }
@@ -473,11 +651,11 @@ class _QuoteBox extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.fromLTRB(10, 6, 4, 6),
       decoration: BoxDecoration(
-          color: NetbarColors.accent.withValues(alpha: .1), borderRadius: BorderRadius.circular(6), border: const Border(left: BorderSide(color: NetbarColors.accent, width: 2))),
+          color: NT.accent.withValues(alpha: .08), borderRadius: BorderRadius.circular(NT.rSm), border: const Border(left: BorderSide(color: NT.accent, width: 3))),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Icon(Icons.format_quote, size: 16, color: c.accentText),
         const SizedBox(width: 6),
-        Expanded(child: Text(ctl.quote, maxLines: 3, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12.5, color: c.text2))),
+        Expanded(child: Text(ctl.quote, maxLines: 3, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: NT.fSmall, color: c.text2))),
         AIconButton(icon: Icons.close, tooltip: '取消引用', size: 15, onPressed: ctl.clearQuote),
       ]),
     );
@@ -491,15 +669,26 @@ class _RefChips extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = NetbarColors(context);
+    final mobile = NetbarScope.of(context).isMobile;
     Widget chip(IconData icon, String label, Color color, VoidCallback onDelete) => Container(
           constraints: const BoxConstraints(maxWidth: 260),
-          padding: const EdgeInsets.fromLTRB(8, 3, 4, 3),
+          padding: EdgeInsets.fromLTRB(8, mobile ? 6 : 3, 4, mobile ? 6 : 3),
           decoration: BoxDecoration(color: color.withValues(alpha: .12), borderRadius: BorderRadius.circular(999), border: Border.all(color: color.withValues(alpha: .3))),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
             Icon(icon, size: 13, color: color),
             const SizedBox(width: 4),
-            Flexible(child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: color))),
-            GestureDetector(onTap: onDelete, child: Padding(padding: const EdgeInsets.only(left: 4), child: Icon(Icons.close, size: 14, color: color))),
+            Flexible(child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: NT.fCaption, color: color))),
+            Semantics(
+              button: true,
+              label: '移除$label',
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: onDelete,
+                child: MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: Padding(padding: EdgeInsets.fromLTRB(4, 0, mobile ? 6 : 2, 0), child: Icon(Icons.close, size: mobile ? 16 : 14, color: color))),
+              ),
+            ),
           ]),
         );
     final purple = c.dark ? const Color(0xFFC084FC) : const Color(0xFF7E22CE);
@@ -521,7 +710,7 @@ class _QueueBox extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.fromLTRB(10, 6, 6, 6),
       decoration: BoxDecoration(
-          color: NetbarColors.accent.withValues(alpha: .05), borderRadius: BorderRadius.circular(10), border: Border.all(color: NetbarColors.accent.withValues(alpha: .4))),
+          color: Color.alphaBlend(NT.accent.withValues(alpha: .05), c.card), borderRadius: BorderRadius.circular(NT.rMd), border: Border.all(color: NT.accent.withValues(alpha: .35))),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Row(children: [
           Icon(Icons.schedule, size: 14, color: c.accentText),
@@ -529,7 +718,7 @@ class _QueueBox extends StatelessWidget {
           Expanded(
               child: Text(
                   '排队中 ${ctl.queue.length} 条${ctl.queuePaused ? '（已暂停，点“立即处理”继续）' : ctl.busy ? '，这一轮结束后按顺序处理' : ''}',
-                  style: TextStyle(fontSize: 11.5, color: c.accentText))),
+                  style: TextStyle(fontSize: NT.fCaption, color: c.accentText))),
         ]),
         for (var i = 0; i < ctl.queue.length; i++)
           Padding(
@@ -540,12 +729,13 @@ class _QueueBox extends StatelessWidget {
                   height: 18,
                   alignment: Alignment.center,
                   decoration: BoxDecoration(color: c.fill, shape: BoxShape.circle),
-                  child: Text('${i + 1}', style: TextStyle(fontSize: 10.5, color: c.muted))),
+                  child: Text('${i + 1}', style: TextStyle(fontSize: 11, color: c.muted))),
               const SizedBox(width: 8),
               Expanded(
                   child: Text(ctl.queue[i].opts.text.isEmpty ? '（只有附件）' : ctl.queue[i].opts.text,
-                      maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12.5, color: c.text2))),
-              AButton(label: '立即处理', icon: s.isCupertino ? CupertinoIcons.bolt : Icons.bolt, small: true, kind: BtnKind.primary, onPressed: () => ctl.processNow(ctl.queue[i])),
+                      maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: NT.fSmall, color: c.text2))),
+              const SizedBox(width: 6),
+              AButton(label: s.isMobile && MediaQuery.sizeOf(context).width < 360 ? '立即' : '立即处理', icon: s.isCupertino ? CupertinoIcons.bolt : Icons.bolt, small: true, kind: BtnKind.primary, onPressed: () => ctl.processNow(ctl.queue[i])),
               AIconButton(icon: Icons.close, tooltip: '删除', size: 16, onPressed: () => ctl.removeQueued(ctl.queue[i])),
             ]),
           ),
@@ -590,13 +780,13 @@ class _MentionList extends StatelessWidget {
       if (x.type != last) {
         last = x.type;
         rows.add(Padding(
-            padding: const EdgeInsets.fromLTRB(10, 6, 10, 2), child: Text(_names[x.type] ?? '', style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.w700, color: c.muted))));
+            padding: const EdgeInsets.fromLTRB(10, 6, 10, 2), child: Text(_names[x.type] ?? '', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: c.muted))));
       }
-      rows.add(Material(
-        color: i == ctl.mentionIndex && s.isDesktop ? NetbarColors.accent.withValues(alpha: .14) : Colors.transparent,
-        borderRadius: BorderRadius.circular(8),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(8),
+      rows.add(DecoratedBox(
+        decoration: BoxDecoration(color: i == ctl.mentionIndex && s.isDesktop ? NT.accent.withValues(alpha: .14) : Colors.transparent, borderRadius: BorderRadius.circular(NT.rSm)),
+        child: Pressable(
+          radius: NT.rSm,
+          label: x.title,
           onTap: () => ctl.pickMention(i),
           child: Padding(
             padding: EdgeInsets.symmetric(horizontal: 10, vertical: s.isMobile ? 9 : 6),
@@ -605,9 +795,9 @@ class _MentionList extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text.rich(TextSpan(style: TextStyle(fontSize: 13, color: c.text), children: _mark(x.title, ctl.mentionQuery, c.accentText)),
+                Text.rich(TextSpan(style: TextStyle(fontSize: s.isMobile ? NT.fBody : NT.fSmall, color: c.text), children: _mark(x.title, ctl.mentionQuery, c.accentText)),
                     maxLines: 1, overflow: TextOverflow.ellipsis),
-                if (ctl.mentionSnippets[i].isNotEmpty) Text(ctl.mentionSnippets[i], maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11, color: c.muted)),
+                if (ctl.mentionSnippets[i].isNotEmpty) Text(ctl.mentionSnippets[i], maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: NT.fCaption, color: c.muted)),
               ])),
             ]),
           ),
@@ -618,18 +808,18 @@ class _MentionList extends StatelessWidget {
       constraints: BoxConstraints(maxHeight: s.isMobile ? 240 : 300),
       padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
-          color: c.bubble,
-          borderRadius: BorderRadius.circular(12),
+          color: c.card,
+          borderRadius: BorderRadius.circular(NT.rMd),
           border: Border.all(color: c.line),
-          boxShadow: const [BoxShadow(color: Color(0x22000000), blurRadius: 16, offset: Offset(0, 4))]),
+          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: c.dark ? .4 : .12), blurRadius: 18, offset: const Offset(0, 6))]),
       child: rows.isEmpty
           ? Padding(
               padding: const EdgeInsets.all(10),
-              child: Text(ctl.mentionQuery.isEmpty ? '知识库和技能都还是空的' : '知识库和技能里都没有找到“${ctl.mentionQuery}”', style: TextStyle(fontSize: 12, color: c.muted)))
+              child: Text(ctl.mentionQuery.isEmpty ? '知识库和技能都还是空的' : '知识库和技能里都没有找到“${ctl.mentionQuery}”', style: TextStyle(fontSize: NT.fCaption, color: c.muted)))
           : Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
               Flexible(child: ListView(shrinkWrap: true, padding: EdgeInsets.zero, children: rows)),
               if (s.isDesktop)
-                Padding(padding: const EdgeInsets.fromLTRB(10, 4, 10, 2), child: Text('↑↓ 选择 · Enter 确认 · Esc 关闭', style: TextStyle(fontSize: 10.5, color: c.faint))),
+                Padding(padding: const EdgeInsets.fromLTRB(10, 4, 10, 2), child: Text('↑↓ 选择 · Enter 确认 · Esc 关闭', style: TextStyle(fontSize: 11, color: c.faint))),
             ]),
     );
   }

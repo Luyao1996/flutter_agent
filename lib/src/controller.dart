@@ -110,6 +110,18 @@ class ChatController extends ChangeNotifier {
   /// 界面状态变了（例如朗读开始、结束）时让界面刷新
   void refresh() => notifyListeners();
 
+  /// 组件关掉以后不再刷新界面
+  @override
+  void notifyListeners() {
+    if (!_disposed) super.notifyListeners();
+  }
+
+  void _cancelStream() {
+    final c = _streamCancel;
+    if (c != null && !c.isCompleted) c.complete();
+    _streamCancel = null;
+  }
+
   // ---------- 对话状态 ----------
   String? sessionId;
   String title = '';
@@ -138,6 +150,22 @@ class ChatController extends ChangeNotifier {
   int _kbSavedCount = 0;
   bool _stopNext = false;
   Completer<void>? _streamCancel;
+  bool _disposed = false;
+  Timer? _diagTimer, _draftTimer;
+  /// 调用过的远程机器工具（Codex、DeepSeek 开始时不报连接状态，远程工具调用成功就算已连接）
+  final Set<String> _remoteCalls = {};
+
+  /// AI 正在生成、还没写完的这段回复（只用来显示，写完后由完整的 text 事件替换）
+  String? streamingText;
+
+  /// 一次给出整段回复时（Codex、DeepSeek），用打字机效果显示的那段：轮次编号:事件序号
+  String? typewriterKey;
+  DateTime typewriterAt = DateTime(0);
+
+  // ---------- 切换 AI（Claude、Codex、DeepSeek） ----------
+  List<Harness> harnesses = [];
+  String harnessId = '';
+  Harness? get harness => harnesses.where((h) => h.id == harnessId).firstOrNull;
   final DateTime _openedAt = DateTime.now();
   static const diagnoseDelay = Duration(seconds: 3);
 
@@ -172,6 +200,8 @@ class ChatController extends ChangeNotifier {
       return;
     }
     final prefs = await SharedPreferences.getInstance();
+    harnessId = prefs.getString('netbar_ops.harness') ?? '';
+    loadHarnesses();
     final draft = prefs.getString(_key('draft'));
     if (draft != null && input.text.isEmpty) input.text = draft;
     final saved = prefs.getString(_key('session'));
@@ -187,6 +217,25 @@ class ChatController extends ChangeNotifier {
     } else {
       await prefs.setString(_key(k), v);
     }
+  }
+
+  /// 可以用的 AI 列表；记住的那个用不了时换成服务器默认的
+  Future<void> loadHarnesses() async {
+    try {
+      final r = await api.get('/api/harnesses');
+      harnesses = asList(r['items']).map((x) => Harness.fromJson(asMap(x))).toList();
+      if (!harnesses.any((h) => h.id == harnessId && h.available)) harnessId = str(r['default']);
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  /// 换一个 AI：下一条消息开始生效（同一个对话中途也能换）
+  Future<void> setHarness(String id) async {
+    if (id == harnessId) return;
+    harnessId = id;
+    notifyListeners();
+    (await SharedPreferences.getInstance()).setString('netbar_ops.harness', id);
+    toast('已切换到 ${harness?.name ?? id}，下一条消息开始生效');
   }
 
   void _showStart() {
@@ -213,7 +262,8 @@ class ChatController extends ChangeNotifier {
     }
     _setBusy(true);
     _setThinking(true, '稍等几秒，远程画面连上后马上开始检查…');
-    Timer(wait, () {
+    _diagTimer = Timer(wait, () {
+      if (_disposed) return;
       _setBusy(false);
       send(SendOptions(diagnose: true));
     });
@@ -272,7 +322,7 @@ class ChatController extends ChangeNotifier {
 
   /// 发出一轮：opts.hasParent 为 false 时接在当前版本的最后
   Future<void> send(SendOptions opts, {VoidCallback? onFail}) async {
-    if (busy) return;
+    if (busy || _disposed) return;
     showStartChoices = false;
     final parentTurn = opts.hasParent ? opts.parentTurn : _currentLeaf();
     _diagOptions = null;
@@ -302,6 +352,7 @@ class ChatController extends ChangeNotifier {
         'barId': config.barKey,
         'sessionId': sessionId,
         'isClient': config.isClient,
+        if (harnessId.isNotEmpty) 'harness': harnessId,
       };
       await for (final (e, d) in api.stream('/api/chat', body, cancel: _streamCancel!.future)) {
         started = true;
@@ -309,10 +360,26 @@ class ChatController extends ChangeNotifier {
       }
     } on ApiError catch (e) {
       if (!started) onFail?.call();
-      notes.add(LocalNote('error', e.message));
+      _failLive(e.message);
+    } catch (e) {
+      if (!started) onFail?.call();
+      _failLive('出错了：$e');
     } finally {
       _endRun(opts.diagnose, opts.summarize);
     }
+  }
+
+  /// 这一轮中途出错（连接断了等）：在这一轮里显示原因，并算作已结束（反馈、重新生成按钮照常出现）
+  void _failLive(String message) {
+    final t = liveTurn == null ? null : tree.turns[liveTurn];
+    if (t == null || t.done) {
+      notes.add(LocalNote('error', message));
+      return;
+    }
+    final ev = ChatEvent('error', {'error': message, 'local': true}, t.id);
+    events.add(ev);
+    t.events.add(ev);
+    t.done = true;
   }
 
   String? _currentLeaf() {
@@ -322,7 +389,7 @@ class ChatController extends ChangeNotifier {
 
   /// 打开时这个对话还有任务在执行：重新连上，先补上这一轮已有的内容，再接着实时显示
   Future<void> _attachRunning() async {
-    var diagnose = false, summarize = false;
+    var diagnose = false, summarize = false, reload = false;
     _diagOptions = null;
     _kbSavedCount = 0;
     _setBusy(true);
@@ -337,9 +404,15 @@ class ChatController extends ChangeNotifier {
         _onLiveEvent(e, d);
       }
     } on ApiError catch (e) {
-      notes.add(LocalNote('error', '${e.message}，可以重新打开这个对话查看最新内容'));
+      // 任务刚好在这期间结束了：重新打开一次，把这一轮补上
+      if (e.status == 409) {
+        reload = true;
+      } else {
+        _failLive(e.message);
+      }
     } finally {
       _endRun(diagnose, summarize);
+      if (reload && sessionId != null && !_disposed) scheduleMicrotask(() => openSession(sessionId!, restoring: true));
     }
   }
 
@@ -347,8 +420,9 @@ class ChatController extends ChangeNotifier {
     _setThinking(false);
     _setBusy(false);
     taskId = null;
+    _stopNext = false;
+    streamingText = null;
     final t = liveTurn == null ? null : tree.turns[liveTurn];
-    t?.done = true;
     void note(LocalNote n) => t == null ? notes.add(n) : (turnNotes[t.id] ??= []).add(n);
     // 自动检查没找出问题（或检查失败）：请用户自己描述
     if (diagnose && (_diagOptions == null || _diagOptions!.isEmpty)) {
@@ -359,7 +433,7 @@ class ChatController extends ChangeNotifier {
     liveTurn = null;
     _changed();
     // 接着处理排队的消息
-    scheduleMicrotask(runQueue);
+    if (!_disposed) scheduleMicrotask(runQueue);
   }
 
   void _onLiveEvent(String e, Map<String, dynamic> d) {
@@ -373,6 +447,14 @@ class ChatController extends ChangeNotifier {
       return;
     }
     if (e == 'session') return _onSession(d);
+    // 正在生成的文字只用来显示，不算进对话记录；还没写完的选项代码块先不显示
+    if (e == 'text_delta') {
+      final text = str(d['text']).replaceFirst(RegExp(r'```options[\s\S]*$'), '').trim();
+      if (text.isEmpty) return;
+      streamingText = text;
+      _setThinking(true, 'AI 正在回复…');
+      return notifyListeners();
+    }
     final ev = ChatEvent(e, d, liveTurn);
     if (e == 'user') {
       // 新对话：之前没连上的尝试不再显示
@@ -386,17 +468,29 @@ class ChatController extends ChangeNotifier {
       selected[(d['parent'] as String?) ?? 'root'] = str(d['turn']);
       return _changed();
     }
+    // 先取这一轮再加事件：先加的话，树重建时已经包含这条，再加一次就重复了
+    final t = tree.turns[liveTurn];
     events.add(ev);
-    tree.turns[liveTurn]?.events.add(ev);
+    t?.events.add(ev);
     switch (e) {
       case 'text':
         final o = splitOptions(str(d['text'])).options;
         if (o != null) _diagOptions = o;
+        // 一次给出整段的（没有经过“边生成边显示”）：用打字机效果快速显示
+        if (streamingText == null && t != null) {
+          typewriterKey = '${t.id}:${t.events.length - 1}';
+          typewriterAt = DateTime.now();
+        }
+        streamingText = null;
         _setThinking(true);
       case 'tool_use':
+        // 远程机器的工具名不带 mcp__ 前缀（知识库工具带）
+        if (!str(d['name']).startsWith('mcp__')) _remoteCalls.add(str(d['id']));
+        _setThinking(true, 'AI 正在调用工具…');
       case 'auto_approved':
         _setThinking(true, 'AI 正在调用工具…');
       case 'tool_result':
+        if (d['isError'] != true && _remoteCalls.contains(str(d['id']))) mcpStatus = 'connected';
         _setThinking(true);
       case 'approval':
         _setThinking(false);
@@ -419,8 +513,13 @@ class ChatController extends ChangeNotifier {
     if (str(d['title']).isNotEmpty) title = str(d['title']);
     autoApprove = d['autoApprove'] == true;
     sessionInfo = '对话进行中';
-    mcpStatus = d['mcpStatus'] == 'connected' ? 'connected' : 'failed';
-    if (mcpStatus == 'failed') notes.add(LocalNote('error', '远程机器没有连上，请确认链接是否正确、机器是否在线。'));
+    // Codex、DeepSeek 开始时不报告连接状态（unknown）：连不上会在调用工具时报错
+    if (d['mcpStatus'] == 'connected') {
+      mcpStatus = 'connected';
+    } else if (d['mcpStatus'] != 'unknown') {
+      mcpStatus = 'failed';
+      notes.add(LocalNote('error', '远程机器没有连上，请确认链接是否正确、机器是否在线。'));
+    }
     notifyListeners();
   }
 
@@ -453,6 +552,7 @@ class ChatController extends ChangeNotifier {
   }
 
   void runQueue() {
+    if (_disposed) return;
     if (busy || queuePaused || queue.isEmpty) return notifyListeners();
     final item = queue.removeAt(0);
     notifyListeners();
@@ -622,9 +722,10 @@ class ChatController extends ChangeNotifier {
   // ---------- 对话：新建、打开、改名、删除 ----------
   void _reset() {
     if (autoApprove && sessionId != null) api.post('/api/auto-approve/off', {'sessionId': sessionId}).catch_();
-    _streamCancel?.complete();
-    _streamCancel = null;
+    _cancelStream();
     autoApprove = false;
+    streamingText = null;
+    _remoteCalls.clear();
     sessionId = null;
     _remember('session', null);
     title = '';
@@ -661,6 +762,8 @@ class ChatController extends ChangeNotifier {
       if (!restoring) toast(e.message);
       return false;
     }
+    // 等待期间用户已经发出了新消息（或组件已关闭）：不能再切换，否则会打断刚发出的这一轮
+    if (_disposed || busy) return false;
     _reset();
     showStartChoices = false;
     sessionId = id;
@@ -745,6 +848,16 @@ class ChatController extends ChangeNotifier {
     _prepareAndUpload(f, bytes);
   }
 
+  /// 选的文件太大，没读进来：直接显示成失败的附件卡片
+  void addOversized(String name, int size) {
+    if (files.length >= limits['count']!) return toast('一条消息最多带 ${limits['count']} 个附件');
+    final f = PendingFile(name: name, size: size, kind: guessKind(name))
+      ..status = 'error'
+      ..error = '太大了（${fmtSize(size)}），单个文件不能超过 ${fmtSize(limits['pdf']!)}';
+    files.add(f);
+    notifyListeners();
+  }
+
   /// 粘贴的长文字变成文本附件
   void addPastedText(String text) {
     addFile(Uint8List.fromList(utf8.encode(text)), '粘贴的文本-${_stamp()}.txt', pasted: true);
@@ -766,15 +879,25 @@ class ChatController extends ChangeNotifier {
       if (bytes.length > max) throw ApiError('太大了（${fmtSize(bytes.length)}），${kindNames[f.kind]}不能超过 ${fmtSize(max)}');
       final total = files.where((x) => x.status != 'error').fold<int>(0, (n, x) => n + x.size);
       if (total > limits['total']!) throw ApiError('附件总大小不能超过 ${fmtSize(limits['total']!)}');
+      var last = DateTime(0);
       f.info = await api.upload(bytes, name, uploadGroup, pasted: f.pasted, cancel: f.cancel.future, onProgress: (p) {
         f.progress = p;
-        notifyListeners();
+        // 进度最多每 100 毫秒刷新一次界面
+        final now = DateTime.now();
+        if (p >= 1 || now.difference(last).inMilliseconds >= 100) {
+          last = now;
+          notifyListeners();
+        }
       });
       f.status = 'done';
     } on ApiError catch (e) {
       if (!files.contains(f)) return;
       f.status = 'error';
       f.error = e.message;
+    } catch (_) {
+      if (!files.contains(f)) return;
+      f.status = 'error';
+      f.error = f.kind == 'image' ? '图片打不开，可能已损坏' : '文件读取失败';
     }
     notifyListeners();
   }
@@ -839,7 +962,8 @@ class ChatController extends ChangeNotifier {
   void _onInputChanged() {
     if (input.text != _lastText) {
       _lastText = input.text;
-      _remember('draft', input.text);
+      _draftTimer?.cancel();
+      _draftTimer = Timer(const Duration(milliseconds: 500), () => _remember('draft', _lastText));
     }
     _checkMention();
   }
@@ -928,7 +1052,11 @@ class ChatController extends ChangeNotifier {
 
   @override
   void dispose() {
-    _streamCancel?.complete();
+    _disposed = true;
+    _cancelStream();
+    queue.clear();
+    _diagTimer?.cancel();
+    _draftTimer?.cancel();
     _mentionTimer?.cancel();
     input.dispose();
     api.close();

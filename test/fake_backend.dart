@@ -67,6 +67,14 @@ class FakeBackend {
               ]
             },
           '/api/share/status' => {'share': null},
+          '/api/harnesses' => {
+              'items': [
+                {'id': 'claude', 'name': 'Claude', 'desc': 'Anthropic Claude Code', 'available': true},
+                {'id': 'codex', 'name': 'Codex', 'desc': 'OpenAI Codex', 'available': true},
+                {'id': 'dsh', 'name': 'DeepSeek', 'desc': 'DeepSeek Harness', 'available': false},
+              ],
+              'default': 'claude'
+            },
           '/api/approve' => () {
               approval?.complete(b['allow'] == true);
               return {'ok': true};
@@ -118,9 +126,12 @@ class FakeBackend {
         send('approval_done', {'id': 'tool1', 'allow': allow, 'reason': allow ? '' : '用户在页面上拒绝了这个操作。'});
         send('tool_result', {'id': 'tool1', 'isError': !allow, 'content': allow ? '已结束进程' : '拒绝'});
       }
+      // 先边生成边推送一段，最后再给完整的一段
+      send('text_delta', {'text': '## 检查结果\n这台机器'});
+      await Future<void>.delayed(const Duration(milliseconds: 10));
       send('text', {'text': '## 检查结果\n这台机器 **CPU 占用正常**，`notepad.exe` 已处理。\n\n- 第一项：显卡驱动正常\n- 第二项：网络正常\n\n| 项目 | 状态 |\n|---|---|\n| 显卡 | 正常 |\n| 网络 | 正常 |'});
       send('kb_used', {'id': 'k1', 'title': '桌面图标被隐藏的排查方法', 'effective': true});
-      send('done', {'sessionId': sessionId, 'isError': false, 'turns': 3, 'cost': 0.0123});
+      send('done', {'sessionId': sessionId, 'isError': false, 'turns': 3, 'cost': 0.0123, 'harness': b['harness'] ?? 'claude'});
       await ctl.close();
     }();
     return http.StreamedResponse(ctl.stream, 200, headers: {'content-type': 'text/event-stream'});

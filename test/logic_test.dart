@@ -1,5 +1,11 @@
 // 逻辑测试：轮次树和版本、配置解析、发送和实时返回、排队、@ 推荐、操作确认
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:netbar_ops/netbar_ops.dart';
 import 'package:netbar_ops/src/api.dart';
@@ -154,5 +160,48 @@ void main() {
     expect(ctl.tree.siblings(ctl.path.last).length, 2);
     ctl.stepBranch(ctl.path.last, -1);
     expect(ctl.path.last.id, 't2');
+  });
+
+  test('切换 AI：列表从后台取，选择记住，发送时带上；生成中的文字结束后清掉；同一段回复只显示一次', () async {
+    final be = FakeBackend();
+    final ctl = ChatController(cfg, api: NetbarApi(cfg, newClient: be.client));
+    await ctl.start();
+    await settle();
+    expect(ctl.harnesses.map((h) => h.id), ['claude', 'codex', 'dsh']);
+    expect(ctl.harnessId, 'claude');
+    await ctl.setHarness('codex');
+    expect((await SharedPreferences.getInstance()).getString('netbar_ops.harness'), 'codex');
+    ctl.input.text = '没有声音';
+    ctl.sendComposer();
+    await settle();
+    expect(be.chatBodies.last['harness'], 'codex');
+    expect(ctl.streamingText, isNull);
+    expect(ctl.path.single.events.where((e) => e.e == 'text').length, 1);
+    expect(ctl.path.single.events.where((e) => e.e == 'done').single.d['harness'], 'codex');
+  });
+
+  test('网络中途断开：这一轮标记结束并显示原因，不会一直转圈', () async {
+    final be = FakeBackend();
+    final client = MockClient.streaming((req, body) async {
+      if (req.url.path != '/api/chat') return be.client().send(req);
+      final c = StreamController<List<int>>();
+      c.add(utf8.encode('event: start\ndata: {"taskId":"x","turn":"t1"}\n\n'));
+      c.add(utf8.encode('event: user\ndata: {"text":"hi","kind":"chat","turn":"t1"}\n\n'));
+      Future<void>.delayed(const Duration(milliseconds: 20), () {
+        c.addError(const SocketException('reset'));
+        c.close();
+      });
+      return http.StreamedResponse(c.stream, 200);
+    });
+    final ctl = ChatController(cfg, api: NetbarApi(cfg, newClient: () => client));
+    await ctl.start();
+    ctl.input.text = 'hi';
+    ctl.sendComposer();
+    await settle();
+    expect(ctl.busy, isFalse);
+    final t = ctl.path.single;
+    expect(t.done, isTrue);
+    expect(str(t.events.last.d['error']), contains('连接断开'));
+    ctl.dispose();
   });
 }

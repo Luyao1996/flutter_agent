@@ -1,9 +1,11 @@
 // 消息区：每一轮的用户消息、AI 回复、操作确认、问题选项、提示行，以及消息下方的操作
+// AI 回复不加气泡、占满宽度（像 ChatGPT / Claude），边生成边显示，末尾有闪烁的光标
 // 电脑上：选中文字右键可以“引用”，每条回复下方有一排操作按钮
 // 手机上：长按消息弹出操作菜单（复制、选择文字、引用、朗读、反馈、重新生成），符合手机聊天应用的习惯
 import 'dart:convert';
 
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -16,6 +18,8 @@ import 'adaptive.dart';
 import 'attachments.dart';
 import 'markdown.dart';
 
+const _harnessNames = {'claude': 'Claude', 'codex': 'Codex', 'dsh': 'DeepSeek'};
+
 class MessageList extends StatefulWidget {
   const MessageList({super.key});
   @override
@@ -25,7 +29,7 @@ class MessageList extends StatefulWidget {
 class _MessageListState extends State<MessageList> {
   final _scroll = ScrollController();
   ChatController? _ctl;
-  int _lastCount = -1;
+  String _lastSig = '';
   bool _stick = true;
 
   @override
@@ -49,11 +53,12 @@ class _MessageListState extends State<MessageList> {
 
   /// 有新内容时：原来就在底部（或开始了新的一轮）就滚到最下面
   void _onChange() {
-    final count = _ctl!.events.length + _ctl!.notes.length;
-    final grew = count != _lastCount;
-    final newTurn = _ctl!.events.isNotEmpty && _ctl!.events.last.e == 'user';
-    _lastCount = count;
-    if (!grew || !(_stick || newTurn)) return;
+    final c = _ctl!;
+    final sig = '${c.events.length}:${c.notes.length}:${c.streamingText?.length ?? 0}:${c.liveTurn}';
+    if (sig == _lastSig) return;
+    final newTurn = c.events.isNotEmpty && c.events.last.e == 'user' && !_lastSig.startsWith('${c.events.length}:');
+    _lastSig = sig;
+    if (!(_stick || newTurn)) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scroll.hasClients) _scroll.jumpTo(_scroll.position.maxScrollExtent);
     });
@@ -71,23 +76,33 @@ class _MessageListState extends State<MessageList> {
     final s = NetbarScope.of(context);
     final ctl = s.controller;
     final path = ctl.path;
-    final items = <Widget>[
-      if (path.isEmpty && ctl.notes.isEmpty && !ctl.showStartChoices && !ctl.busy) const _EmptyTip(),
-      if (ctl.showStartChoices) const _StartChoices(),
-      for (final t in path) TurnView(t, key: ValueKey(t.id)),
-      for (final n in ctl.notes) NoteView(n),
-      if (ctl.historyNote) const _Divider('以上是历史记录 · 在下方输入，AI 会记得前面的内容，接着这个对话继续处理'),
+    final undone = {
+      for (final e in ctl.events)
+        if (e.e == 'memory_undone') str(e.d['id'])
+    };
+    final lastId = path.isEmpty ? null : path.last.id;
+    // 先列出要显示的块，列表只构建看得见的那几块
+    final items = <Widget Function()>[
+      if (path.isEmpty && ctl.notes.isEmpty && !ctl.showStartChoices && !ctl.busy) () => const _EmptyTip(),
+      if (ctl.showStartChoices) () => const _StartChoices(),
+      for (final t in path) () => TurnView(t, key: ValueKey(t.id), undone: undone, isLast: t.id == lastId),
+      for (final n in ctl.notes) () => NoteView(n),
+      if (ctl.historyNote) () => const _Divider('以上是历史记录 · 在下方输入，AI 会记得前面的内容，接着这个对话继续处理'),
     ];
-    final maxWidth = s.isDesktop ? 920.0 : 760.0;
-    return Scrollbar(
-      controller: _scroll,
-      child: ListView(
+    final maxWidth = s.isDesktop ? 860.0 : 760.0;
+    return ScrollConfiguration(
+      // 自己画一个滚动条，避免电脑上出现两个
+      behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+      child: Scrollbar(
         controller: _scroll,
-        padding: EdgeInsets.symmetric(horizontal: s.isDesktop ? 20 : 12, vertical: 16),
-        children: [
-          for (final w in items)
-            Center(child: ConstrainedBox(constraints: BoxConstraints(maxWidth: maxWidth), child: Padding(padding: const EdgeInsets.only(bottom: 12), child: w))),
-        ],
+        child: ListView.builder(
+          controller: _scroll,
+          padding: EdgeInsets.symmetric(horizontal: s.isDesktop ? 20 : 14, vertical: 16),
+          itemCount: items.length,
+          itemBuilder: (ctx, i) => Center(
+            child: ConstrainedBox(constraints: BoxConstraints(maxWidth: maxWidth), child: Padding(padding: const EdgeInsets.only(bottom: 18), child: items[i]())),
+          ),
+        ),
       ),
     );
   }
@@ -99,13 +114,13 @@ class _EmptyTip extends StatelessWidget {
   Widget build(BuildContext context) {
     final c = NetbarColors(context);
     return Padding(
-      padding: const EdgeInsets.only(top: 80),
+      padding: const EdgeInsets.only(top: 72),
       child: Column(children: [
-        Icon(Icons.smart_toy_outlined, size: 44, color: NetbarColors.accent.withValues(alpha: .9)),
-        const SizedBox(height: 10),
-        Text('描述遇到的问题，AI 会通过远程连接帮你排查处理。', style: TextStyle(color: c.muted)),
+        Icon(Icons.smart_toy_outlined, size: 40, color: NT.accent.withValues(alpha: .9)),
+        const SizedBox(height: 12),
+        Text('描述遇到的问题，AI 会通过远程连接帮你排查处理。', textAlign: TextAlign.center, style: TextStyle(color: c.muted)),
         const SizedBox(height: 4),
-        Text('例如：“12号机开机后游戏菜单打不开，帮我看看原因”', style: TextStyle(color: c.faint, fontSize: 12)),
+        Text('例如：“12号机开机后游戏菜单打不开，帮我看看原因”', textAlign: TextAlign.center, style: TextStyle(color: c.muted, fontSize: NT.fCaption)),
       ]),
     );
   }
@@ -144,47 +159,43 @@ class ChoicesCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = NetbarColors(context);
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-          color: NetbarColors.accent.withValues(alpha: .05), border: Border.all(color: NetbarColors.accent.withValues(alpha: .25)), borderRadius: BorderRadius.circular(12)),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Padding(padding: const EdgeInsets.fromLTRB(2, 0, 2, 8), child: Text(title, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: c.accentText))),
-        for (final ch in choices)
-          Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Material(
-              color: c.bubble,
-              borderRadius: BorderRadius.circular(9),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(9),
+    final s = NetbarScope.of(context);
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Padding(padding: const EdgeInsets.fromLTRB(2, 0, 2, 8), child: Text(title, style: TextStyle(fontSize: NT.fSmall, fontWeight: FontWeight.w600, color: c.text2))),
+      for (final ch in choices)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Opacity(
+            opacity: enabled ? 1 : .5,
+            child: DecoratedBox(
+              decoration: BoxDecoration(color: c.card, border: Border.all(color: c.line), borderRadius: BorderRadius.circular(NT.rMd)),
+              child: Pressable(
                 onTap: enabled ? ch.onTap : null,
-                child: Opacity(
-                  opacity: enabled ? 1 : .45,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                    decoration: BoxDecoration(border: Border.all(color: c.line), borderRadius: BorderRadius.circular(9)),
-                    child: Row(children: [
-                      if (ch.icon != null) ...[Icon(ch.icon, size: 18, color: c.accentText), const SizedBox(width: 10)],
-                      Expanded(
-                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text(ch.title, style: TextStyle(fontWeight: FontWeight.w600, color: c.text)),
-                        if (ch.detail.isNotEmpty) Text(ch.detail, style: TextStyle(fontSize: 12, color: c.muted)),
-                      ])),
-                      if (NetbarScope.of(context).isMobile) Icon(Icons.chevron_right, color: c.faint),
-                    ]),
-                  ),
+                radius: NT.rMd,
+                label: ch.title,
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 14, vertical: s.isMobile ? 13 : 11),
+                  child: Row(children: [
+                    if (ch.icon != null) ...[Icon(ch.icon, size: 20, color: c.accentText), const SizedBox(width: 12)],
+                    Expanded(
+                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(ch.title, style: TextStyle(fontWeight: FontWeight.w600, color: c.text)),
+                      if (ch.detail.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 2), child: Text(ch.detail, style: TextStyle(fontSize: NT.fCaption, color: c.muted))),
+                    ])),
+                    Icon(s.isCupertino ? CupertinoIcons.chevron_forward : Icons.chevron_right, size: 18, color: c.faint),
+                  ]),
                 ),
               ),
             ),
           ),
-      ]),
-    );
+        ),
+    ]);
   }
 }
 
 /// 居中的灰色提示行（本轮结束、已记入知识库…），可以带一个可点的链接
-class SysLine extends StatelessWidget {
+/// 链接是文字的一部分（TextSpan），系统字体放大时和周围的字一样大，换行也自然
+class SysLine extends StatefulWidget {
   const SysLine({super.key, required this.text, this.icon, this.link, this.onLink, this.tail, this.color, this.trailing});
   final String text;
   final IconData? icon;
@@ -193,26 +204,40 @@ class SysLine extends StatelessWidget {
   final Color? color;
   final Widget? trailing;
   @override
+  State<SysLine> createState() => _SysLineState();
+}
+
+class _SysLineState extends State<SysLine> {
+  final _tap = TapGestureRecognizer();
+  @override
+  void dispose() {
+    _tap.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final c = NetbarColors(context);
-    final col = color ?? c.muted;
+    final col = widget.color ?? c.muted;
+    _tap.onTap = widget.onLink;
     return Center(
-      child: Wrap(crossAxisAlignment: WrapCrossAlignment.center, alignment: WrapAlignment.center, spacing: 6, children: [
-        if (icon != null) Icon(icon, size: 14, color: col),
-        Text.rich(TextSpan(style: TextStyle(fontSize: 12, color: col), children: [
-          TextSpan(text: text),
-          if (link != null)
-            WidgetSpan(
-                alignment: PlaceholderAlignment.baseline,
-                baseline: TextBaseline.alphabetic,
-                child: GestureDetector(
-                  onTap: onLink,
-                  child:
-                      MouseRegion(cursor: SystemMouseCursors.click, child: Text(link!, style: TextStyle(fontSize: 12, color: c.accentText, decoration: TextDecoration.underline))),
-                )),
-          if (tail != null) TextSpan(text: tail),
-        ])),
-        ?trailing,
+      child: Wrap(crossAxisAlignment: WrapCrossAlignment.center, alignment: WrapAlignment.center, spacing: 6, runSpacing: 2, children: [
+        Text.rich(
+          TextSpan(style: TextStyle(fontSize: NT.fCaption, color: col, height: 1.5), children: [
+            if (widget.icon != null) WidgetSpan(alignment: PlaceholderAlignment.middle, child: Padding(padding: const EdgeInsets.only(right: 5), child: Icon(widget.icon, size: 14, color: col))),
+            TextSpan(text: widget.text),
+            if (widget.link != null)
+              TextSpan(
+                text: widget.link,
+                recognizer: _tap,
+                mouseCursor: SystemMouseCursors.click,
+                style: TextStyle(color: c.accentText, decoration: TextDecoration.underline, decorationColor: c.accentText.withValues(alpha: .5)),
+              ),
+            if (widget.tail != null) TextSpan(text: widget.tail),
+          ]),
+          textAlign: TextAlign.center,
+        ),
+        ?widget.trailing,
       ]),
     );
   }
@@ -224,7 +249,7 @@ class _Divider extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = NetbarColors(context);
-    return Column(children: [Divider(color: c.line), Text(text, textAlign: TextAlign.center, style: TextStyle(fontSize: 11.5, color: c.muted))]);
+    return Column(children: [const Divider(), const SizedBox(height: 6), Text(text, textAlign: TextAlign.center, style: TextStyle(fontSize: NT.fCaption, color: c.muted))]);
   }
 }
 
@@ -236,9 +261,11 @@ class NoteView extends StatelessWidget {
   Widget build(BuildContext context) {
     if (n.kind == 'sys') return SysLine(text: n.text);
     if (n.kind == 'error') return ErrorBubble(n.text);
-    return Align(alignment: Alignment.centerLeft, child: _AiBubbleFrame(child: Text(n.text, style: TextStyle(color: NetbarColors(context).text2))));
+    return _AiText(child: Text(n.text, style: TextStyle(color: NetbarColors(context).text2, fontSize: _bodySize(context), height: 1.6)));
   }
 }
+
+double _bodySize(BuildContext context) => NetbarScope.of(context).isMobile ? NT.fBodyMobile : NT.fBody;
 
 class ErrorBubble extends StatelessWidget {
   const ErrorBubble(this.text, {super.key});
@@ -249,32 +276,24 @@ class ErrorBubble extends StatelessWidget {
     return Align(
       alignment: Alignment.centerLeft,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
-        decoration: BoxDecoration(
-            color: NetbarColors.danger.withValues(alpha: .08), border: Border.all(color: NetbarColors.danger.withValues(alpha: .3)), borderRadius: BorderRadius.circular(12)),
-        child: SelectableText(text, style: TextStyle(color: c.dangerText, fontSize: 13.5)),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        decoration: BoxDecoration(color: NT.danger.withValues(alpha: .08), borderRadius: BorderRadius.circular(NT.rMd), border: Border.all(color: NT.danger.withValues(alpha: .25))),
+        child: Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Padding(padding: const EdgeInsets.only(top: 2), child: Icon(Icons.error_outline, size: 16, color: c.dangerText)),
+          const SizedBox(width: 8),
+          Flexible(child: SelectableText(text, style: TextStyle(color: c.dangerText, fontSize: NT.fSmall, height: 1.5))),
+        ]),
       ),
     );
   }
 }
 
-class _AiBubbleFrame extends StatelessWidget {
-  const _AiBubbleFrame({required this.child});
+/// AI 回复的容器：不加气泡，占满宽度
+class _AiText extends StatelessWidget {
+  const _AiText({required this.child});
   final Widget child;
   @override
-  Widget build(BuildContext context) {
-    final c = NetbarColors(context);
-    final mobile = NetbarScope.of(context).isMobile;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 10),
-      decoration: BoxDecoration(
-        color: mobile && !c.dark ? const Color(0xFFF0F1F4) : c.bubble,
-        border: mobile ? null : Border.all(color: c.line),
-        borderRadius: const BorderRadius.only(topLeft: Radius.circular(14), topRight: Radius.circular(14), bottomRight: Radius.circular(14), bottomLeft: Radius.circular(4)),
-      ),
-      child: child,
-    );
-  }
+  Widget build(BuildContext context) => Align(alignment: Alignment.centerLeft, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 2), child: child));
 }
 
 /// 版本切换 ‹ 1/2 ›
@@ -291,7 +310,7 @@ class BranchNav extends StatelessWidget {
     final idle = !ctl.busy;
     return Row(mainAxisSize: MainAxisSize.min, children: [
       AIconButton(icon: Icons.chevron_left, tooltip: '上一个版本', size: 18, onPressed: idle && i > 0 ? () => ctl.stepBranch(t, -1) : null),
-      Text('${i + 1}/${ids.length}', style: TextStyle(fontSize: 12, color: c.muted, fontFamily: monoFont, fontFamilyFallback: monoFallback)),
+      Text('${i + 1}/${ids.length}', style: monoStyle(size: NT.fCaption, color: c.muted)),
       AIconButton(icon: Icons.chevron_right, tooltip: '下一个版本', size: 18, onPressed: idle && i < ids.length - 1 ? () => ctl.stepBranch(t, 1) : null),
     ]);
   }
@@ -299,8 +318,14 @@ class BranchNav extends StatelessWidget {
 
 /// 一轮对话
 class TurnView extends StatelessWidget {
-  const TurnView(this.t, {super.key});
+  const TurnView(this.t, {super.key, required this.undone, required this.isLast});
   final Turn t;
+
+  /// 已经撤销的记忆
+  final Set<String> undone;
+
+  /// 是不是当前版本的最后一轮（问题选项只在最后一轮能点）
+  final bool isLast;
 
   @override
   Widget build(BuildContext context) {
@@ -319,17 +344,18 @@ class TurnView extends StatelessWidget {
       ]));
     }
     final approvals = {for (final e in t.events.where((e) => e.e == 'approval_done')) str(e.d['id']): e.d};
-    final undone = ctl.events.where((e) => e.e == 'memory_undone').map((e) => str(e.d['id'])).toSet();
+    final harnessName = _harnessNames[str(t.user['harness'])];
     for (var i = 0; i < t.events.length; i++) {
       final ev = t.events[i];
       final d = ev.d;
       switch (ev.e) {
         case 'text':
           final sp = splitOptions(str(d['text']));
-          if (sp.text.isNotEmpty) children.add(AiMessage(t, sp.text));
+          final key = '${t.id}:$i';
+          final animate = live && ctl.typewriterKey == key && DateTime.now().difference(ctl.typewriterAt) < const Duration(seconds: 2);
+          if (sp.text.isNotEmpty) children.add(AiMessage(t, sp.text, key: ValueKey(key), typewriter: animate));
           if (sp.options != null && sp.options!.isNotEmpty) {
-            final key = '${t.id}:$i';
-            final enabled = !ctl.lockedOptions.contains(key) && ctl.path.isNotEmpty && ctl.path.last.id == t.id && !ctl.busy;
+            final enabled = !ctl.lockedOptions.contains(key) && isLast && !ctl.busy;
             children.add(ChoicesCard(
               title: 'AI 发现了下面这些可能的问题，请选择要解决的：',
               enabled: enabled,
@@ -371,29 +397,37 @@ class TurnView extends StatelessWidget {
           children.add(SysLine(
             icon: Icons.sticky_note_2_outlined,
             text: '已记住：${str(d['content'])}（${memoryScopeNames[str(d['scope'])] ?? ''}）',
-            color: isUndone ? c.faint : null,
             trailing: isUndone
-                ? Text('已撤销', style: TextStyle(fontSize: 12, color: c.faint))
+                ? Text('已撤销', style: TextStyle(fontSize: NT.fCaption, color: c.muted))
                 : AButton(label: '撤销', icon: Icons.undo, small: true, kind: BtnKind.text, onPressed: () => ctl.undoMemory(str(d['id']), t.id)),
           ));
         case 'notice':
-          children.add(SysLine(icon: Icons.warning_amber_rounded, text: str(d['text']), color: c.warnText));
+          children.add(SysLine(icon: Icons.info_outline, text: str(d['text']), color: c.warnText));
         case 'auto_mode':
-          children.add(const SysLine(text: '已开启“本次会话始终允许”，高危操作仍需手动确认'));
+          children.add(const SysLine(icon: Icons.bolt, text: '已开启“本次会话始终允许”，高危操作仍需手动确认'));
         case 'done':
-          if (d['isError'] == true) children.add(ErrorBubble(d['subtype'] == 'error_max_turns' ? '已达到单次最多步数，可以回复“继续”接着处理。' : '处理过程中出错了。'));
-          final cost = d['cost'] is num ? ' · 花费约 \$${(d['cost'] as num).toStringAsFixed(4)}' : '';
-          children.add(SysLine(text: '本轮结束 · ${d['turns'] ?? '-'} 步$cost'));
+          if (d['isError'] == true) {
+            children.add(ErrorBubble(d['subtype'] == 'error_max_turns'
+                ? '已达到单次最多步数，可以回复“继续”接着处理。'
+                : str(d['error']).isNotEmpty
+                    ? '处理过程中出错了：${d['error']}'
+                    : '处理过程中出错了。'));
+          }
+          final cost = d['cost'] is num ? ' · 约 \$${(d['cost'] as num).toStringAsFixed(4)}' : '';
+          final who = _harnessNames[str(d['harness'])] ?? harnessName;
+          children.add(SysLine(text: '本轮结束${who == null ? '' : ' · $who'} · ${d['turns'] ?? '-'} 步$cost'));
         case 'error':
           children.add(ErrorBubble(str(d['error'])));
       }
     }
+    // 正在生成、还没写完的这段
+    if (live && ctl.streamingText != null) children.add(AiMessage(t, ctl.streamingText!, key: const ValueKey('streaming'), streaming: true));
     for (final n in ctl.turnNotes[t.id] ?? const <LocalNote>[]) {
       children.add(NoteView(n));
     }
     if (!live) children.add(TurnActions(t));
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      for (var i = 0; i < children.length; i++) Padding(padding: EdgeInsets.only(top: i == 0 ? 0 : 10), child: children[i]),
+      for (var i = 0; i < children.length; i++) Padding(padding: EdgeInsets.only(top: i == 0 ? 0 : 12), child: children[i]),
     ]);
   }
 }
@@ -408,23 +442,23 @@ class _UserMessage extends StatelessWidget {
     final s = NetbarScope.of(context);
     final ctl = s.controller;
     final bubble = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
-      decoration: const BoxDecoration(
-        color: NetbarColors.accentStrong,
-        borderRadius: BorderRadius.only(topLeft: Radius.circular(14), topRight: Radius.circular(14), bottomLeft: Radius.circular(14), bottomRight: Radius.circular(4)),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: NT.accentStrong,
+        borderRadius: BorderRadius.circular(18).copyWith(bottomRight: const Radius.circular(6)),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
         if (t.quote.isNotEmpty)
           Container(
-            margin: const EdgeInsets.only(bottom: 6),
+            margin: const EdgeInsets.only(bottom: 8),
             padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
             decoration: BoxDecoration(
                 color: Colors.white.withValues(alpha: .12), borderRadius: BorderRadius.circular(4), border: const Border(left: BorderSide(color: Colors.white70, width: 2))),
-            child: Text(t.quote, maxLines: 4, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, color: Colors.white.withValues(alpha: .85))),
+            child: Text(t.quote, maxLines: 4, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: NT.fCaption, color: Colors.white.withValues(alpha: .88))),
           ),
         if (t.skill != null || t.kbRefs.isNotEmpty)
           Padding(
-            padding: const EdgeInsets.only(bottom: 6),
+            padding: const EdgeInsets.only(bottom: 8),
             child: Wrap(spacing: 4, runSpacing: 4, children: [
               if (t.skill != null)
                 _BubbleChip(icon: Icons.auto_awesome_outlined, label: str(t.skill!['name']), skill: true, onTap: () => openSkillsPanel(context, selectId: str(t.skill!['id']))),
@@ -436,11 +470,13 @@ class _UserMessage extends StatelessWidget {
             ]),
           ),
         if (t.attachments.isNotEmpty)
-          Padding(padding: const EdgeInsets.only(bottom: 6), child: Wrap(spacing: 6, runSpacing: 6, children: [for (final a in t.attachments) AttachmentCard(a, onBubble: true)])),
-        if (!t.noText) Text(t.text, style: const TextStyle(color: Colors.white, fontSize: 14, height: 1.5)),
+          Padding(
+              padding: EdgeInsets.only(bottom: t.noText ? 0 : 8),
+              child: Wrap(spacing: 6, runSpacing: 6, children: [for (final a in t.attachments) AttachmentCard(a, onBubble: true)])),
+        if (!t.noText) Text(t.text, style: TextStyle(color: Colors.white, fontSize: _bodySize(context), height: 1.5)),
       ]),
     );
-    void menu() async {
+    Future<void> menu() async {
       final r = await actionSheet<String>(context, actions: [
         const SheetAction('复制', 'copy', icon: Icons.copy_outlined),
         if (ctl.canBranch(t) && !ctl.busy) const SheetAction('编辑后重新发送', 'edit', icon: Icons.edit_outlined),
@@ -452,38 +488,40 @@ class _UserMessage extends StatelessWidget {
       if (r == 'edit') ctl.beginEdit(t);
     }
 
+    final branch = BranchNav(t);
     return Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-      Align(
-        alignment: Alignment.centerRight,
-        child: FractionallySizedBox(
-          widthFactor: s.isMobile ? .86 : .8,
+      LayoutBuilder(
+        builder: (ctx, box) => Align(
           alignment: Alignment.centerRight,
-          child: Align(
-              alignment: Alignment.centerRight,
-              child: s.isMobile
-                  ? GestureDetector(
-                      onLongPress: () {
-                        HapticFeedback.mediumImpact();
-                        menu();
-                      },
-                      child: bubble)
-                  : SelectionArea(child: bubble)),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: box.maxWidth * (s.isMobile ? .86 : .78)),
+            child: s.isMobile
+                ? GestureDetector(
+                    onLongPress: () {
+                      HapticFeedback.mediumImpact();
+                      menu();
+                    },
+                    child: bubble)
+                : SelectionArea(child: bubble),
+          ),
         ),
       ),
       // 电脑上消息下方一排按钮；手机上长按气泡操作，这里只留版本切换
-      Row(mainAxisAlignment: MainAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
-        if (s.isDesktop) ...[
+      if (s.isDesktop)
+        Row(mainAxisAlignment: MainAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
           AIconButton(
               icon: Icons.copy_outlined,
               tooltip: '复制',
+              size: 15,
               onPressed: () async {
                 await copyText(t.noText ? '' : t.text);
                 if (context.mounted) showToast(context, '已复制');
               }),
-          if (ctl.canBranch(t)) AIconButton(icon: Icons.edit_outlined, tooltip: '编辑后重新发送', onPressed: ctl.busy ? null : () => ctl.beginEdit(t)),
-        ],
-        BranchNav(t),
-      ]),
+          if (ctl.canBranch(t)) AIconButton(icon: Icons.edit_outlined, tooltip: '编辑后重新发送', size: 15, onPressed: ctl.busy ? null : () => ctl.beginEdit(t)),
+          branch,
+        ])
+      else
+        branch,
     ]);
   }
 }
@@ -495,17 +533,22 @@ class _BubbleChip extends StatelessWidget {
   final VoidCallback onTap;
   final bool skill;
   @override
-  Widget build(BuildContext context) => GestureDetector(
-        onTap: onTap,
-        child: Container(
-          constraints: const BoxConstraints(maxWidth: 240),
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-          decoration: BoxDecoration(color: skill ? const Color(0x73A855F7) : Colors.white.withValues(alpha: .16), borderRadius: BorderRadius.circular(999)),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(icon, size: 12, color: Colors.white),
-            const SizedBox(width: 4),
-            Flexible(child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11.5, color: Colors.white))),
-          ]),
+  Widget build(BuildContext context) => DecoratedBox(
+        decoration: BoxDecoration(color: skill ? const Color(0x73A855F7) : Colors.white.withValues(alpha: .16), borderRadius: BorderRadius.circular(999)),
+        child: Pressable(
+          onTap: onTap,
+          radius: 999,
+          label: label,
+          hoverColor: Colors.white.withValues(alpha: .1),
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 240),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(icon, size: 12, color: Colors.white),
+              const SizedBox(width: 4),
+              Flexible(child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: NT.fCaption, color: Colors.white))),
+            ]),
+          ),
         ),
       );
 }
@@ -534,29 +577,41 @@ class _EditBoxState extends State<_EditBox> {
     super.dispose();
   }
 
+  /// 电脑上 Enter 发送、Esc 取消；输入法正在组字时交给输入法
+  KeyEventResult _onKey(FocusNode node, KeyEvent e) {
+    if (e is! KeyDownEvent) return KeyEventResult.ignored;
+    final composing = _ctl.value.composing.isValid && !_ctl.value.composing.isCollapsed;
+    if (composing) return KeyEventResult.ignored;
+    final ctl = NetbarScope.read(context).controller;
+    if (e.logicalKey == LogicalKeyboardKey.escape) {
+      ctl.cancelEdit();
+      return KeyEventResult.handled;
+    }
+    final enter = e.logicalKey == LogicalKeyboardKey.enter || e.logicalKey == LogicalKeyboardKey.numpadEnter;
+    if (enter && !HardwareKeyboard.instance.isShiftPressed && NetbarScope.read(context).isDesktop) {
+      ctl.submitEdit(widget.t, _ctl.text);
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
   @override
   Widget build(BuildContext context) {
     final s = NetbarScope.of(context);
     final ctl = s.controller;
     final c = NetbarColors(context);
     final field = s.isCupertino
-        ? CupertinoTextField(controller: _ctl, focusNode: _focus, minLines: 2, maxLines: 8, padding: const EdgeInsets.all(10))
-        : TextField(controller: _ctl, focusNode: _focus, minLines: 2, maxLines: 8, decoration: const InputDecoration(border: OutlineInputBorder(), isDense: true));
+        ? CupertinoTextField(controller: _ctl, focusNode: _focus, minLines: 2, maxLines: 8, padding: const EdgeInsets.all(10), style: TextStyle(color: c.text))
+        : TextField(controller: _ctl, focusNode: _focus, minLines: 2, maxLines: 8, decoration: fieldDecoration(context));
     return Align(
       alignment: Alignment.centerRight,
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 640),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          CallbackShortcuts(
-            bindings: {
-              const SingleActivator(LogicalKeyboardKey.escape): ctl.cancelEdit,
-              if (s.isDesktop) const SingleActivator(LogicalKeyboardKey.enter): () => ctl.submitEdit(widget.t, _ctl.text),
-            },
-            child: field,
-          ),
+          Focus(onKeyEvent: _onKey, child: field),
           const SizedBox(height: 6),
           Row(children: [
-            Expanded(child: Text('附件、引用和推荐的内容会保留', style: TextStyle(fontSize: 11.5, color: c.muted))),
+            Expanded(child: Text('附件、引用和推荐的内容会保留', maxLines: 2, style: TextStyle(fontSize: NT.fCaption, color: c.muted))),
             AButton(label: '取消', kind: BtnKind.text, small: true, onPressed: ctl.cancelEdit),
             const SizedBox(width: 6),
             AButton(label: '发送', kind: BtnKind.primary, small: true, onPressed: () => ctl.submitEdit(widget.t, _ctl.text)),
@@ -567,54 +622,78 @@ class _EditBoxState extends State<_EditBox> {
   }
 }
 
-/// AI 的一段回复
+/// AI 的一段回复：streaming 时末尾带闪烁的光标；typewriter 时用打字机效果在 1 秒左右显示完
 class AiMessage extends StatefulWidget {
-  const AiMessage(this.t, this.text, {super.key});
+  const AiMessage(this.t, this.text, {super.key, this.streaming = false, this.typewriter = false});
   final Turn t;
   final String text;
+  final bool streaming, typewriter;
   @override
   State<AiMessage> createState() => _AiMessageState();
 }
 
-class _AiMessageState extends State<AiMessage> {
+class _AiMessageState extends State<AiMessage> with SingleTickerProviderStateMixin {
   String _selected = '';
+  AnimationController? _type;
+  Widget? _cached;
+  String _cachedKey = '';
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.typewriter) {
+      _type = AnimationController(vsync: this, duration: const Duration(milliseconds: 900))..forward();
+      _type!.addListener(() => setState(() {}));
+    }
+  }
+
+  @override
+  void dispose() {
+    _type?.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final s = NetbarScope.of(context);
-    final body = MarkdownBody(widget.text, fontSize: s.isMobile ? 15 : 14);
-    final bubble = _AiBubbleFrame(child: body);
+    final c = NetbarColors(context);
+    final typing = _type != null && _type!.isAnimating;
+    final shown = typing ? widget.text.substring(0, (widget.text.length * _type!.value).ceil().clamp(0, widget.text.length)) : widget.text;
+    final caret = widget.streaming || typing;
+    // 内容没变就不重新解析 Markdown
+    final key = '${c.dark}|$caret|${_bodySize(context)}|$shown';
+    if (key != _cachedKey) {
+      _cachedKey = key;
+      _cached = MarkdownBody(shown, fontSize: _bodySize(context), caret: caret);
+    }
+    final body = _AiText(child: _cached!);
     if (s.isMobile) {
-      return Align(
-        alignment: Alignment.centerLeft,
-        child: GestureDetector(
-            onLongPress: () {
-              HapticFeedback.mediumImpact();
-              showReplyMenu(context, widget.t, widget.text);
-            },
-            child: bubble),
-      );
+      return GestureDetector(
+          onLongPress: caret
+              ? null
+              : () {
+                  HapticFeedback.mediumImpact();
+                  showReplyMenu(context, widget.t, widget.text);
+                },
+          child: body);
     }
     // 电脑上：选中文字后右键菜单里多一个“引用”
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: SelectionArea(
-        onSelectionChanged: (v) => _selected = v?.plainText ?? '',
-        contextMenuBuilder: (ctx, state) => AdaptiveTextSelectionToolbar.buttonItems(
-          anchors: state.contextMenuAnchors,
-          buttonItems: [
-            ...state.contextMenuButtonItems,
-            if (_selected.trim().isNotEmpty)
-              ContextMenuButtonItem(
-                  label: '引用',
-                  onPressed: () {
-                    s.controller.setQuote(_selected);
-                    state.hideToolbar();
-                  }),
-          ],
-        ),
-        child: bubble,
+    return SelectionArea(
+      onSelectionChanged: (v) => _selected = v?.plainText ?? '',
+      contextMenuBuilder: (ctx, state) => AdaptiveTextSelectionToolbar.buttonItems(
+        anchors: state.contextMenuAnchors,
+        buttonItems: [
+          ...state.contextMenuButtonItems,
+          if (_selected.trim().isNotEmpty)
+            ContextMenuButtonItem(
+                label: '引用',
+                onPressed: () {
+                  s.controller.setQuote(_selected);
+                  state.hideToolbar();
+                }),
+        ],
       ),
+      child: body,
     );
   }
 }
@@ -715,7 +794,7 @@ Future<void> giveFeedback(BuildContext context, Turn t, String value) async {
   if (reason != null) await ctl.sendFeedback(t, 'down', reason.trim());
 }
 
-/// 一轮结束后的操作：复制、朗读、点赞点踩、重新生成
+/// 一轮结束后的操作：复制、朗读、点赞点踩、重新生成（放不下时自动换行）
 class TurnActions extends StatelessWidget {
   const TurnActions(this.t, {super.key});
   final Turn t;
@@ -726,11 +805,13 @@ class TurnActions extends StatelessWidget {
     final text = t.replyText;
     final fb = t.feedback?['value'];
     final on = NetbarColors(context).accentText;
+    final size = s.isDesktop ? 15.0 : 17.0;
     final buttons = <Widget>[
       if (text.isNotEmpty) ...[
         AIconButton(
             icon: Icons.copy_outlined,
             tooltip: '复制',
+            size: size,
             onPressed: () async {
               await copyText(text);
               if (context.mounted) showToast(context, '已复制');
@@ -738,20 +819,23 @@ class TurnActions extends StatelessWidget {
         AIconButton(
             icon: ctl.speakingTurn == t.id ? Icons.stop_circle_outlined : Icons.volume_up_outlined,
             tooltip: ctl.speakingTurn == t.id ? '停止朗读' : '朗读',
+            size: size,
             color: ctl.speakingTurn == t.id ? on : null,
             onPressed: () => toggleSpeak(context, t, text)),
-        AIconButton(icon: fb == 'up' ? Icons.thumb_up : Icons.thumb_up_outlined, tooltip: '有帮助', color: fb == 'up' ? on : null, onPressed: () => giveFeedback(context, t, 'up')),
+        AIconButton(
+            icon: fb == 'up' ? Icons.thumb_up : Icons.thumb_up_outlined, tooltip: '有帮助', size: size, color: fb == 'up' ? on : null, onPressed: () => giveFeedback(context, t, 'up')),
         AIconButton(
             icon: fb == 'down' ? Icons.thumb_down : Icons.thumb_down_outlined,
+            size: size,
             color: fb == 'down' ? on : null,
             tooltip: fb == 'down' ? '你点了“没帮助”${str(t.feedback?['reason']).isEmpty ? '' : '：${t.feedback!['reason']}'}（再点一次取消）' : '没帮助',
             onPressed: () => giveFeedback(context, t, 'down')),
       ],
-      if (t.kind != 'summarize' && ctl.canBranch(t)) AIconButton(icon: Icons.refresh, tooltip: '重新生成', onPressed: ctl.busy ? null : () => ctl.regenerate(t)),
+      if (t.kind != 'summarize' && ctl.canBranch(t)) AIconButton(icon: Icons.refresh, tooltip: '重新生成', size: size, onPressed: ctl.busy ? null : () => ctl.regenerate(t)),
       if (t.kind == 'summarize') BranchNav(t),
     ];
     if (buttons.isEmpty) return const SizedBox.shrink();
-    return Row(children: buttons);
+    return Transform.translate(offset: Offset(s.isDesktop ? -6 : -10, -6), child: Wrap(children: buttons));
   }
 }
 
@@ -770,57 +854,59 @@ class ApprovalCard extends StatelessWidget {
     final risks = asList(a['risks']).map(str).toList();
     final high = risks.isNotEmpty;
     final allowed = result?['allow'] == true;
-    final tone = result == null
-        ? (high ? NetbarColors.danger : NetbarColors.warn)
-        : allowed
-            ? NetbarColors.ok
-            : NetbarColors.danger;
+    final pending = result == null && live;
+    final tone = pending ? (high ? NT.danger : NT.warn) : (result == null ? c.muted : (allowed ? NT.ok : NT.danger));
     Widget footer;
     if (result != null) {
       final reason = str(result!['reason']).split('。').first;
       footer = Wrap(spacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
         Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(allowed ? Icons.check : Icons.close, size: 16, color: allowed ? c.okText : c.dangerText),
-          const SizedBox(width: 4),
-          Text(allowed ? '已允许' : '已拒绝', style: TextStyle(fontWeight: FontWeight.w600, color: allowed ? c.okText : c.dangerText)),
+          Icon(allowed ? Icons.check_circle_outline : Icons.cancel_outlined, size: 16, color: allowed ? c.okText : c.dangerText),
+          const SizedBox(width: 5),
+          Text(allowed ? '已允许' : '已拒绝', style: TextStyle(fontSize: NT.fSmall, fontWeight: FontWeight.w600, color: allowed ? c.okText : c.dangerText)),
         ]),
-        if (!allowed && reason.isNotEmpty) Text(reason, style: TextStyle(fontSize: 12, color: c.muted)),
+        if (!allowed && reason.isNotEmpty) Text(reason, style: TextStyle(fontSize: NT.fCaption, color: c.muted)),
       ]);
     } else if (live) {
-      footer = Wrap(spacing: 8, runSpacing: 8, crossAxisAlignment: WrapCrossAlignment.center, children: [
-        AButton(label: '允许执行', kind: BtnKind.primary, small: s.isDesktop, onPressed: () => ctl.approve(str(a['id']), allow: true)),
-        if (!high)
-          AButton(
-              label: '本次会话始终允许',
-              small: s.isDesktop,
-              onPressed: () async {
-                if (await confirmAutoApprove(context)) ctl.approve(str(a['id']), allow: true, always: true);
-              }),
-        AButton(label: '拒绝', kind: BtnKind.danger, small: s.isDesktop, onPressed: () => ctl.approve(str(a['id']), allow: false)),
-        Text('${high ? '高危操作每次都需要手动允许；' : ''}10 分钟内不处理将自动拒绝', style: TextStyle(fontSize: 11.5, color: c.muted)),
+      footer = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          AButton(label: '允许执行', kind: BtnKind.primary, small: true, onPressed: () => ctl.approve(str(a['id']), allow: true)),
+          if (!high)
+            AButton(
+                label: '本次会话始终允许',
+                small: true,
+                onPressed: () async {
+                  if (await confirmAutoApprove(context)) ctl.approve(str(a['id']), allow: true, always: true);
+                }),
+          AButton(label: '拒绝', kind: BtnKind.danger, small: true, onPressed: () => ctl.approve(str(a['id']), allow: false)),
+        ]),
+        const SizedBox(height: 6),
+        Text('${high ? '高危操作每次都需要手动允许；' : ''}10 分钟内不处理将自动拒绝', style: TextStyle(fontSize: NT.fCaption, color: c.muted)),
       ]);
     } else {
-      footer = Text('未处理（对话已中断）', style: TextStyle(fontSize: 12, color: c.muted));
+      footer = Text('未处理（对话已中断）', style: TextStyle(fontSize: NT.fCaption, color: c.muted));
     }
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-      decoration: BoxDecoration(color: tone.withValues(alpha: .06), border: Border.all(color: tone.withValues(alpha: .4)), borderRadius: BorderRadius.circular(12)),
+      decoration: BoxDecoration(
+        color: Color.alphaBlend(tone.withValues(alpha: pending ? .07 : .04), c.card),
+        border: Border.all(color: tone.withValues(alpha: pending ? .5 : .25)),
+        borderRadius: BorderRadius.circular(NT.rMd),
+      ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Wrap(spacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
-          if (high) Tag('高危操作', color: c.dangerText) else Icon(Icons.warning_amber_rounded, size: 17, color: c.warnText),
-          Text('AI 要执行一个会改动机器的操作：', style: TextStyle(color: c.text2)),
-          Text(str(a['tool']), style: TextStyle(fontWeight: FontWeight.w600, color: c.text, fontFamily: monoFont, fontFamilyFallback: monoFallback)),
+        Wrap(spacing: 6, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
+          if (high) Tag('高危操作', color: c.dangerText) else Icon(Icons.shield_outlined, size: 16, color: pending ? c.warnText : c.muted),
+          Text('要执行会改动机器的操作', style: TextStyle(fontSize: NT.fSmall, color: c.text2)),
+          Text(str(a['tool']), style: monoStyle(size: NT.fSmall, color: c.text).copyWith(fontWeight: FontWeight.w600)),
         ]),
-        if (high) Padding(padding: const EdgeInsets.only(top: 6), child: Text('风险：${risks.join('；')}', style: TextStyle(fontSize: 12.5, color: c.dangerText))),
+        if (high) Padding(padding: const EdgeInsets.only(top: 6), child: Text('风险：${risks.join('；')}', style: TextStyle(fontSize: NT.fCaption, color: c.dangerText))),
         Container(
-          margin: const EdgeInsets.only(top: 8),
+          margin: const EdgeInsets.only(top: 10),
           width: double.infinity,
-          constraints: const BoxConstraints(maxHeight: 240),
+          constraints: const BoxConstraints(maxHeight: 220),
           padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(color: c.codeBg, borderRadius: BorderRadius.circular(8), border: Border.all(color: c.line)),
-          child: SingleChildScrollView(
-              child: SelectableText(const JsonEncoder.withIndent('  ').convert(a['input']),
-                  style: TextStyle(fontFamily: monoFont, fontFamilyFallback: monoFallback, fontSize: 12, color: c.text2))),
+          decoration: BoxDecoration(color: c.codeBg, borderRadius: BorderRadius.circular(NT.rSm)),
+          child: SingleChildScrollView(child: SelectableText(const JsonEncoder.withIndent('  ').convert(a['input']), style: monoStyle(size: NT.fCaption, color: c.text2))),
         ),
         const SizedBox(height: 10),
         footer,

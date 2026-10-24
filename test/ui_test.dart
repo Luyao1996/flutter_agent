@@ -44,6 +44,9 @@ Widget app(Widget child, {bool dark = false, TargetPlatform? platform}) => Mater
       home: child,
     );
 
+/// 按钮：电脑和安卓按提示文字（Tooltip）找，iOS 没有 Tooltip，按读屏标签找
+Finder findAction(String label) => find.byWidgetPredicate((w) => (w is Tooltip && w.message == label) || (w is Semantics && w.properties.label == label)).first;
+
 /// 多走几帧，让假后台的实时返回都到
 Future<void> flush(WidgetTester t, [int n = 12]) async {
   for (var i = 0; i < n; i++) {
@@ -78,7 +81,7 @@ void main() {
       expect(find.textContaining('请在下方输入框描述你遇到的问题'), findsOneWidget);
       await t.enterText(find.byKey(inputKey), '12号机开机后游戏菜单打不开');
       await t.pump();
-      await t.tap(find.byTooltip(style == NetbarUiStyle.desktop ? '发送（Enter）' : '发送'));
+      await t.tap(findAction(style == NetbarUiStyle.desktop ? '发送（Enter）' : '发送'));
       await flush(t);
       expect(find.text('12号机开机后游戏菜单打不开'), findsWidgets);
       expect(find.textContaining('本轮结束'), findsOneWidget);
@@ -89,12 +92,12 @@ void main() {
       be.askApproval = true;
       await t.enterText(find.byKey(inputKey), '结束记事本');
       await t.pump();
-      await t.tap(find.byTooltip(style == NetbarUiStyle.desktop ? '发送（Enter）' : '发送'));
+      await t.tap(findAction(style == NetbarUiStyle.desktop ? '发送（Enter）' : '发送'));
       await flush(t, 4);
       expect(find.text('允许执行'), findsOneWidget);
       await t.enterText(find.byKey(inputKey), '排队的一条');
       await t.pump();
-      await t.tap(find.byTooltip(style == NetbarUiStyle.desktop ? '排队发送：AI 正在处理，这一轮结束后接着处理' : '排队发送'));
+      await t.tap(findAction(style == NetbarUiStyle.desktop ? '排队发送：AI 正在处理，这一轮结束后接着处理' : '排队发送'));
       await flush(t, 2);
       expect(find.text('立即处理'), findsOneWidget);
       await t.ensureVisible(find.text('允许执行'));
@@ -124,6 +127,10 @@ void main() {
       await flush(t, 10);
       expect(find.text('调用次数'), findsOneWidget);
       await expectLater(find.byType(MaterialApp), matchesGoldenFile('goldens/$name-6-kb-detail.png'));
+      // 第三轮（排队的那条）还在等确认：关掉组件，实时连接跟着断开
+      await t.pumpWidget(const SizedBox());
+      ctl.dispose();
+      await t.pump();
     });
   }
 

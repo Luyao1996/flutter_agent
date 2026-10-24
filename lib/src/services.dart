@@ -33,7 +33,11 @@ bool get isMobilePlatform => !kIsWeb && (Platform.isIOS || Platform.isAndroid);
 Future<({Uint8List bytes, String name})> shrinkImage(Uint8List bytes, String name) => compute(_shrink, (bytes: bytes, name: name));
 
 // ---------- 选文件、拍照、相册 ----------
-typedef PickedFile = ({Uint8List bytes, String name});
+/// 选到的文件：bytes 为 null 表示太大没有读进来（size 是原始大小）
+typedef PickedFile = ({Uint8List? bytes, String name, int size});
+
+/// 单个文件最大 20MB（和服务端一致），超过的不读进内存
+const maxFileBytes = 20 * 1024 * 1024;
 
 const allowedExtensions = [
   'png',
@@ -75,8 +79,17 @@ const allowedExtensions = [
 
 // 用的是 file_picker 9.x 的写法（FilePicker.platform），和宿主项目锁定的版本一致
 Future<List<PickedFile>> pickFiles() async {
-  final r = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: allowedExtensions, allowMultiple: true, withData: true);
-  return [for (final f in r?.files ?? const <PlatformFile>[]) (bytes: f.bytes ?? await File(f.path!).readAsBytes(), name: f.name)];
+  // 不让插件把文件全读进内存（1GB 的日志会把内存撑爆）：先看大小，不超过上限再读
+  final r = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: allowedExtensions, allowMultiple: true, withData: false);
+  final out = <PickedFile>[];
+  for (final f in r?.files ?? const <PlatformFile>[]) {
+    if (f.size > maxFileBytes || (f.path == null && f.bytes == null)) {
+      out.add((bytes: null, name: f.name, size: f.size));
+    } else {
+      out.add((bytes: f.bytes ?? await File(f.path!).readAsBytes(), name: f.name, size: f.size));
+    }
+  }
+  return out;
 }
 
 /// 选 md / txt 文件（知识库背景知识、技能上传用），返回文件名和文字
@@ -93,7 +106,7 @@ Future<List<PickedFile>> pickImages({required bool camera}) async {
   final files = camera
       ? [await picker.pickImage(source: ImageSource.camera, maxWidth: 2000, maxHeight: 2000, imageQuality: 85)].whereType<XFile>().toList()
       : await picker.pickMultiImage(maxWidth: 2000, maxHeight: 2000, imageQuality: 85);
-  return [for (final f in files) (bytes: await f.readAsBytes(), name: f.name)];
+  return [for (final f in files) (bytes: await f.readAsBytes(), name: f.name, size: await f.length())];
 }
 
 // ---------- 剪贴板（Windows 上 Ctrl+V 粘贴截图、从资源管理器复制的文件） ----------
@@ -101,9 +114,17 @@ Future<List<PickedFile>> pickImages({required bool camera}) async {
 Future<List<PickedFile>> readClipboardFiles() async {
   try {
     final paths = await Pasteboard.files();
-    if (paths.isNotEmpty) return [for (final p in paths) (bytes: await File(p).readAsBytes(), name: p.split(RegExp(r'[\\/]')).last)];
+    if (paths.isNotEmpty) {
+      return [
+        for (final p in paths)
+          if (File(p).lengthSync() > maxFileBytes)
+            (bytes: null, name: p.split(RegExp(r'[\\/]')).last, size: File(p).lengthSync())
+          else
+            (bytes: await File(p).readAsBytes(), name: p.split(RegExp(r'[\\/]')).last, size: File(p).lengthSync()),
+      ];
+    }
     final image = await Pasteboard.image;
-    if (image != null && image.isNotEmpty) return [(bytes: image, name: '')];
+    if (image != null && image.isNotEmpty) return [(bytes: image, name: '', size: image.length)];
   } catch (_) {}
   return [];
 }
@@ -114,7 +135,7 @@ Future<String?> readClipboardText() async => (await Clipboard.getData(Clipboard.
 Future<void> copyText(String text) => Clipboard.setData(ClipboardData(text: text));
 
 /// 保存附件：电脑上弹出“另存为”，手机上用系统分享（存到文件、发给别人）
-Future<bool> saveFile(Uint8List bytes, String name) async {
+Future<bool> saveFile(Uint8List bytes, String name, {Rect? origin}) async {
   if (isDesktopPlatform) {
     // 电脑上 saveFile 只返回选好的路径，文件要自己写
     final path = await FilePicker.platform.saveFile(fileName: name, bytes: bytes);
@@ -122,7 +143,7 @@ Future<bool> saveFile(Uint8List bytes, String name) async {
     await File(path).writeAsBytes(bytes);
     return true;
   }
-  final r = await Share.shareXFiles([XFile.fromData(bytes, name: name)], fileNameOverrides: [name]);
+  final r = await Share.shareXFiles([XFile.fromData(bytes, name: name)], fileNameOverrides: [name], sharePositionOrigin: origin);
   return r.status == ShareResultStatus.success;
 }
 
@@ -203,16 +224,27 @@ class Dictation {
     'error_language_unavailable': '这台设备没有安装中文语音识别，请在系统设置里添加中文语言。',
   };
 
-  /// 开始听：onPartial 实时给出正在识别的文字，onFinal 给出确定的一句，onEnd 结束（带出错原因或 null）
+  // 这次识别的回调和出错原因：插件的状态、出错回调只能在初始化时注册一次，所以每次开始时换成这次的
+  void Function(String? error)? _onEnd;
+  String? _error;
+
+  void _finish() {
+    final end = _onEnd;
+    _onEnd = null;
+    end?.call(_error);
+  }
+
+  /// 开始听：onPartial 实时给出正在识别的文字，onFinal 给出确定的一句，onEnd 结束（带出错原因或 null，每次只调一次）
   Future<void> start({required void Function(String) onPartial, required void Function(String) onFinal, required void Function(String? error) onEnd}) async {
-    String? error;
+    _onEnd = onEnd;
+    _error = null;
     if (!_inited) {
       _inited = true;
       try {
         _available = await _stt.initialize(
-          onError: (e) => error = _errors[e.errorMsg] ?? '语音识别出错了（${e.errorMsg}），可以再试一次。',
+          onError: (e) => _error = _errors[e.errorMsg] ?? '语音识别出错了（${e.errorMsg}），可以再试一次。',
           onStatus: (s) {
-            if (s == 'done' || s == 'notListening') onEnd(error);
+            if (s == 'done' || s == 'notListening') _finish();
           },
         );
       } catch (_) {
@@ -221,15 +253,29 @@ class Dictation {
     }
     if (!_available) {
       _inited = false;
-      return onEnd(Platform.isAndroid ? '这台手机没有可用的语音识别服务（很多国产手机需要安装或打开系统自带的语音识别），也可能是没有给麦克风权限。' : '当前设备不支持语音输入，或者没有给麦克风和语音识别权限。');
+      _error = Platform.isAndroid ? '这台手机没有可用的语音识别服务（很多国产手机需要安装或打开系统自带的语音识别），也可能是没有给麦克风权限。' : '当前设备不支持语音输入，或者没有给麦克风和语音识别权限。';
+      return _finish();
     }
-    await _stt.listen(
-      // speech_to_text 7.0 的 SpeechListenOptions 里还没有 localeId，用 listen 自己的参数（7.x 都能用）
-      // ignore: deprecated_member_use
-      localeId: 'zh_CN',
-      listenOptions: SpeechListenOptions(partialResults: true, cancelOnError: true, listenMode: ListenMode.dictation, autoPunctuation: true),
-      onResult: (r) => r.finalResult ? onFinal(r.recognizedWords) : onPartial(r.recognizedWords),
-    );
+    try {
+      await _stt.listen(
+        // speech_to_text 7.0 的 SpeechListenOptions 里还没有 localeId，用 listen 自己的参数（7.x 都能用）
+        // ignore: deprecated_member_use
+        localeId: 'zh_CN',
+        listenOptions: SpeechListenOptions(partialResults: true, cancelOnError: true, listenMode: ListenMode.dictation, autoPunctuation: true),
+        onResult: (r) => r.finalResult ? onFinal(r.recognizedWords) : onPartial(r.recognizedWords),
+      );
+    } catch (_) {
+      _error = '语音识别启动失败，请再试一次。';
+      _finish();
+    }
+  }
+
+  /// 不再需要结果（界面关掉了）：停止，并且不再回调
+  Future<void> cancel() async {
+    _onEnd = null;
+    try {
+      await _stt.cancel();
+    } catch (_) {}
   }
 
   Future<void> stop() async {

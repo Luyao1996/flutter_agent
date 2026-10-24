@@ -307,26 +307,27 @@ class _SkillEditorState extends State<SkillEditor> {
   @override
   Widget build(BuildContext context) {
     final s = NetbarScope.of(context);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+    return EditorLayout(
+      top: [
         AField(controller: _name, label: '名称', maxLength: 40, hint: '例如：客户机开机慢标准检查', autofocus: widget.draft['id'] == null),
         const SizedBox(height: 8),
         AField(controller: _desc, label: '什么时候用', maxLength: 300, hint: '一句话说明适用情况，AI 靠它判断要不要用，例如：客户机开机或进系统很慢时'),
         const SizedBox(height: 8),
-        Expanded(child: AField(controller: _content, label: '步骤（支持 Markdown，写清楚每一步用什么工具、看什么结果）', expands: true, mono: true)),
+      ],
+      body: (expands) =>
+          AField(controller: _content, label: '步骤（支持 Markdown，写清楚每一步用什么工具、看什么结果）', expands: expands, minLines: expands ? null : 8, maxLines: expands ? null : 16, mono: true),
+      bottom: [
         const SizedBox(height: 8),
         Row(children: [
-          Expanded(child: Text('启用（停用后 AI 不会使用，也不能手动运行）', style: TextStyle(fontSize: 13, color: NetbarColors(context).text2))),
-          Switch.adaptive(value: _enabled, onChanged: (v) => setState(() => _enabled = v), activeTrackColor: s.isCupertino ? null : NetbarColors.accent),
+          Expanded(child: Text('启用（停用后 AI 不会使用，也不能手动运行）', style: TextStyle(fontSize: NT.fSmall, color: NetbarColors(context).text2))),
+          Switch.adaptive(value: _enabled, onChanged: (v) => setState(() => _enabled = v), activeTrackColor: s.isCupertino ? null : NT.accent),
         ]),
         const SizedBox(height: 8),
-        Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+        Wrap(alignment: WrapAlignment.end, spacing: 8, children: [
           AButton(label: '取消', kind: BtnKind.text, onPressed: () => widget.onDone(null)),
-          const SizedBox(width: 8),
           AButton(label: _saving ? '保存中…' : '保存', kind: BtnKind.primary, onPressed: _saving ? null : _save),
         ]),
-      ]),
+      ],
     );
   }
 }

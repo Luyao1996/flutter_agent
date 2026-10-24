@@ -176,9 +176,11 @@ class _KbPanelState extends State<KbPanel> {
       ),
       Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4), child: ASearchField(placeholder: '搜索标题或内容', onChanged: (v) => setState(() => _q = v))),
       if (isExp)
-        SizedBox(
-          height: 40,
-          child: ListView(scrollDirection: Axis.horizontal, padding: const EdgeInsets.symmetric(horizontal: 12), children: [
+        // 高度跟着内容走（系统字体放大时不会被截掉）
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+          child: Row(children: [
             for (final k in netbarFields)
               Padding(
                 padding: const EdgeInsets.only(right: 6),
@@ -336,10 +338,9 @@ class _KbEditorState extends State<KbEditor> {
   @override
   Widget build(BuildContext context) {
     final isNew = widget.draft['id'] == null;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Text('${isNew ? '新增' : '修改'}${kbTypeNames[widget.draft['type']]}', style: Theme.of(context).textTheme.titleMedium),
+    return EditorLayout(
+      top: [
+        Text('${isNew ? '新增' : '修改'}${kbTypeNames[widget.draft['type']]}', style: TextStyle(fontSize: NT.fTitle, fontWeight: FontWeight.w600, color: NetbarColors(context).text)),
         const SizedBox(height: 12),
         AField(controller: _title, label: '标题', maxLength: 100, autofocus: isNew, hint: _isExp ? '例如：任务栏和桌面图标消失' : '例如：本店客户机配置和还原系统说明'),
         if (_isExp) ...[
@@ -353,14 +354,15 @@ class _KbEditorState extends State<KbEditor> {
           }),
         ],
         const SizedBox(height: 8),
-        Expanded(child: AField(controller: _content, label: '内容（支持 Markdown 格式）', expands: true, mono: true)),
+      ],
+      body: (expands) => AField(controller: _content, label: '内容（支持 Markdown 格式）', expands: expands, minLines: expands ? null : 8, maxLines: expands ? null : 16, mono: true),
+      bottom: [
         const SizedBox(height: 12),
-        Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+        Wrap(alignment: WrapAlignment.end, spacing: 8, children: [
           AButton(label: '取消', kind: BtnKind.text, onPressed: () => widget.onDone(null)),
-          const SizedBox(width: 8),
           AButton(label: _saving ? '保存中…' : '保存', kind: BtnKind.primary, onPressed: _saving ? null : _save),
         ]),
-      ]),
+      ],
     );
   }
 }

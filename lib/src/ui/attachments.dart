@@ -12,14 +12,19 @@ import '../services.dart';
 import 'adaptive.dart';
 
 /// 附件文件按需下载，同一个只下载一次
+/// 下载失败的记住 30 秒：列表每次刷新都会重建缩略图，不记住的话会一直重复下载
 final Map<String, Future<Uint8List>> _cache = {};
-Future<Uint8List> loadAttachment(NetbarApi api, AttachmentInfo a) {
-  final f = _cache[a.key] ??= api.download(a);
-  f.catchError((_) {
+final Map<String, DateTime> _failedAt = {};
+Future<Uint8List> loadAttachment(NetbarApi api, AttachmentInfo a, {bool retry = false}) {
+  final failed = _failedAt[a.key];
+  if (failed != null && (retry || DateTime.now().difference(failed) > const Duration(seconds: 30))) {
     _cache.remove(a.key);
-    return Uint8List(0);
+    _failedAt.remove(a.key);
+  }
+  return _cache[a.key] ??= api.download(a).catchError((Object e) {
+    _failedAt[a.key] = DateTime.now();
+    throw e;
   });
-  return f;
 }
 
 IconData _kindIcon(String kind) => kind == 'image'
@@ -40,7 +45,7 @@ class AttachmentCard extends StatelessWidget {
     final c = NetbarColors(context);
     final fg = onBubble ? Colors.white : c.text2;
     final bg = onBubble ? Colors.white.withValues(alpha: .14) : c.fill;
-    final radius = BorderRadius.circular(10);
+    final dpr = MediaQuery.devicePixelRatioOf(context);
     Widget body;
     if (a.isImage) {
       body = SizedBox(
@@ -49,7 +54,8 @@ class AttachmentCard extends StatelessWidget {
         child: FutureBuilder<Uint8List>(
           future: loadAttachment(s.controller.api, a),
           builder: (ctx, snap) => snap.hasData && snap.data!.isNotEmpty
-              ? Image.memory(snap.data!, fit: BoxFit.cover, gaplessPlayback: true)
+              // 只按缩略图的大小解码，几张大截图不会占满内存
+              ? Image.memory(snap.data!, fit: BoxFit.cover, gaplessPlayback: true, cacheWidth: ((s.isMobile ? 104 : 120) * dpr).round())
               : Center(child: snap.hasError ? Icon(Icons.broken_image_outlined, color: fg) : const ASpinner()),
         ),
       );
@@ -62,22 +68,20 @@ class AttachmentCard extends StatelessWidget {
           const SizedBox(width: 8),
           Flexible(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-            Text(a.pasted ? '粘贴的文本' : a.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500, color: fg)),
-            Text(a.pasted ? '点开查看' : fmtSize(a.size), style: TextStyle(fontSize: 11, color: fg.withValues(alpha: .7))),
+            Text(a.pasted ? '粘贴的文本' : a.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: NT.fSmall, fontWeight: FontWeight.w500, color: fg)),
+            Text(a.pasted ? '点开查看' : fmtSize(a.size), style: TextStyle(fontSize: 11.5, color: fg.withValues(alpha: .75))),
           ])),
         ]),
       );
     }
-    return Semantics(
-      button: true,
-      label: a.name,
-      child: Material(
-        color: bg,
-        borderRadius: radius,
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(onTap: () => openAttachment(context, a), child: Tooltip(message: a.name, child: body)),
+    final card = DecoratedBox(
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(NT.rSm + 2)),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(NT.rSm + 2),
+        child: Builder(builder: (bctx) => Pressable(onTap: () => openAttachment(bctx, a), radius: NT.rSm + 2, label: a.name, child: body)),
       ),
     );
+    return s.isDesktop ? Tooltip(message: a.name, child: card) : card;
   }
 }
 
@@ -85,8 +89,9 @@ class AttachmentCard extends StatelessWidget {
 Future<void> openAttachment(BuildContext context, AttachmentInfo a) async {
   final s = NetbarScope.read(context);
   Uint8List bytes;
+  final origin = rectOf(context);
   try {
-    bytes = await loadAttachment(s.controller.api, a);
+    bytes = await loadAttachment(s.controller.api, a, retry: true);
     if (bytes.isEmpty) throw ApiError('附件打不开');
   } catch (e) {
     if (context.mounted) showToast(context, '附件打不开：$e');
@@ -95,56 +100,82 @@ Future<void> openAttachment(BuildContext context, AttachmentInfo a) async {
   if (!context.mounted) return;
   if (a.isImage) return showImageViewer(context, bytes, a.name);
   if (a.pasted) return showTextViewer(context, '粘贴的文本', utf8.decode(bytes, allowMalformed: true));
-  await _save(context, bytes, a.name);
+  await _save(context, bytes, a.name, origin);
 }
 
-Future<void> _save(BuildContext context, Uint8List bytes, String name) async {
+/// origin：iPad 上分享面板从哪里弹出来（不给会直接报错）
+Future<void> _save(BuildContext context, Uint8List bytes, String name, [Rect? origin]) async {
   try {
-    final ok = await saveFile(bytes, name);
+    final ok = await saveFile(bytes, name, origin: origin ?? rectOf(context));
     if (ok && context.mounted && isDesktopPlatform) showToast(context, '已保存');
   } catch (_) {
     if (context.mounted) showToast(context, '保存失败');
   }
 }
 
-/// 看大图：可以双指缩放、拖动；手机上是黑底全屏页，电脑上是对话框
+/// 看大图：可以双指缩放、拖动；iOS 是黑底全屏页（导航栏“完成”），安卓是黑底全屏页（返回箭头），电脑上是对话框
+/// 都在组件自己的导航里打开，不会盖住宿主应用的其他区域
 Future<void> showImageViewer(BuildContext context, Uint8List bytes, String name) {
   final s = NetbarScope.read(context);
-  final viewer = InteractiveViewer(maxScale: 6, child: Center(child: Image.memory(bytes)));
+  final viewer = InteractiveViewer(maxScale: 6, child: Center(child: Image.memory(bytes, gaplessPlayback: true)));
   if (s.isDesktop) {
     return showDialog(
         context: context,
+        useRootNavigator: false,
+        barrierColor: Colors.black54,
         builder: (ctx) => Dialog(
               insetPadding: const EdgeInsets.all(24),
               clipBehavior: Clip.antiAlias,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(NT.rLg)),
               child: Column(mainAxisSize: MainAxisSize.min, children: [
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 6, 6, 6),
+                  padding: const EdgeInsets.fromLTRB(16, 8, 8, 8),
                   child: Row(children: [
-                    Expanded(child: Text(name, overflow: TextOverflow.ellipsis)),
-                    TextButton(onPressed: () => _save(ctx, bytes, name), child: const Text('另存为')),
-                    TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('关闭')),
+                    Expanded(child: Text(name, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600))),
+                    Builder(builder: (b) => AButton(label: '另存为', icon: Icons.download_outlined, small: true, onPressed: () => _save(b, bytes, name))),
+                    const SizedBox(width: 4),
+                    AIconButton(icon: Icons.close, tooltip: '关闭', onPressed: () => Navigator.pop(ctx)),
                   ]),
                 ),
-                Flexible(child: viewer),
+                const Divider(height: 1),
+                Flexible(child: ColoredBox(color: const Color(0xFF111111), child: viewer)),
               ]),
             ));
   }
-  final page = Builder(
-      builder: (ctx) => Scaffold(
-            backgroundColor: Colors.black,
-            appBar: AppBar(
+  final Widget page;
+  if (s.isCupertino) {
+    page = Builder(
+        builder: (ctx) => CupertinoPageScaffold(
+              backgroundColor: CupertinoColors.black,
+              navigationBar: CupertinoNavigationBar(
+                backgroundColor: const Color(0xCC000000),
+                border: null,
+                brightness: Brightness.dark,
+                leading: CupertinoButton(padding: EdgeInsets.zero, onPressed: () => Navigator.pop(ctx), child: const Text('完成', style: TextStyle(color: CupertinoColors.white))),
+                middle: Text(name, overflow: TextOverflow.ellipsis, style: const TextStyle(color: CupertinoColors.white)),
+                trailing: Builder(
+                    builder: (b) => CupertinoButton(
+                        padding: EdgeInsets.zero,
+                        onPressed: () => _save(b, bytes, name),
+                        child: const Icon(CupertinoIcons.share, color: CupertinoColors.white, semanticLabel: '保存'))),
+              ),
+              child: SafeArea(child: viewer),
+            ));
+  } else {
+    page = Builder(
+        builder: (ctx) => Scaffold(
               backgroundColor: Colors.black,
-              foregroundColor: Colors.white,
-              title: Text(name, style: const TextStyle(fontSize: 15)),
-              leading: s.isCupertino ? CupertinoButton(onPressed: () => Navigator.pop(ctx), child: const Text('完成', style: TextStyle(color: Colors.white))) : null,
-              leadingWidth: s.isCupertino ? 72 : null,
-              actions: [IconButton(tooltip: '保存', icon: Icon(s.isCupertino ? CupertinoIcons.share : Icons.share_outlined), onPressed: () => _save(ctx, bytes, name))],
-            ),
-            body: SafeArea(child: viewer),
-          ));
-  return Navigator.of(context, rootNavigator: true)
-      .push(s.isCupertino ? CupertinoPageRoute(fullscreenDialog: true, builder: (_) => page) : MaterialPageRoute(fullscreenDialog: true, builder: (_) => page));
+              appBar: AppBar(
+                backgroundColor: Colors.black,
+                foregroundColor: Colors.white,
+                surfaceTintColor: Colors.transparent,
+                title: Text(name, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 16)),
+                actions: [Builder(builder: (b) => IconButton(tooltip: '保存', icon: const Icon(Icons.share_outlined), onPressed: () => _save(b, bytes, name)))],
+              ),
+              body: SafeArea(child: viewer),
+            ));
+  }
+  return Navigator.of(context).push(s.isCupertino ? CupertinoPageRoute(fullscreenDialog: true, builder: (_) => page) : MaterialPageRoute(fullscreenDialog: true, builder: (_) => page));
 }
 
 /// 看粘贴的长文字
@@ -155,7 +186,7 @@ Future<void> showTextViewer(BuildContext context, String title, String text) => 
       height: 620,
       builder: (ctx) => SingleChildScrollView(
           padding: const EdgeInsets.all(16),
-          child: SelectableText(text, style: const TextStyle(fontFamily: monoFont, fontFamilyFallback: monoFallback, fontSize: 13, height: 1.5))),
+          child: SelectableText(text, style: monoStyle(size: 13, color: NetbarColors(ctx).text2).copyWith(height: 1.55))),
     );
 
 /// 发送前的附件卡片：缩略图或图标，上传进度，失败原因，删除按钮
@@ -175,26 +206,26 @@ class PendingFileCard extends StatelessWidget {
       constraints: BoxConstraints(maxWidth: err ? 300 : 230, minHeight: 50),
       padding: isImg ? null : const EdgeInsets.fromLTRB(6, 6, 26, 6),
       decoration: BoxDecoration(
-        color: err ? NetbarColors.danger.withValues(alpha: .07) : c.bubble,
-        border: Border.all(color: err ? NetbarColors.danger.withValues(alpha: .5) : c.line),
-        borderRadius: BorderRadius.circular(10),
+        color: err ? NT.danger.withValues(alpha: .07) : c.card,
+        border: Border.all(color: err ? NT.danger.withValues(alpha: .5) : c.line),
+        borderRadius: BorderRadius.circular(NT.rSm + 2),
       ),
       clipBehavior: Clip.antiAlias,
       child: Stack(children: [
         if (isImg)
-          Positioned.fill(child: Image.memory(f.preview!, fit: BoxFit.cover, opacity: AlwaysStoppedAnimation(f.status == 'uploading' ? .6 : 1)))
+          Positioned.fill(child: Image.memory(f.preview!, fit: BoxFit.cover, cacheWidth: (64 * MediaQuery.devicePixelRatioOf(context)).round(), opacity: AlwaysStoppedAnimation(f.status == 'uploading' ? .6 : 1)))
         else
           Row(mainAxisSize: MainAxisSize.min, children: [
             Container(
               width: 34,
               height: 34,
-              decoration: BoxDecoration(color: (err ? NetbarColors.danger : NetbarColors.accent).withValues(alpha: .12), borderRadius: BorderRadius.circular(8)),
+              decoration: BoxDecoration(color: (err ? NT.danger : NT.accent).withValues(alpha: .12), borderRadius: BorderRadius.circular(8)),
               child: Icon(err ? Icons.error_outline : _kindIcon(f.kind), size: 18, color: err ? c.dangerText : c.accentText),
             ),
             const SizedBox(width: 8),
             Flexible(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-              Text(f.pasted ? '粘贴的文本' : f.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500, color: c.text2)),
+              Text(f.pasted ? '粘贴的文本' : f.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: NT.fSmall, fontWeight: FontWeight.w500, color: c.text2)),
               Text(
                   err
                       ? f.error
@@ -203,11 +234,11 @@ class PendingFileCard extends StatelessWidget {
                           : fmtSize(f.size),
                   maxLines: err ? 3 : 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 11, color: err ? c.dangerText : c.muted)),
+                  style: TextStyle(fontSize: 11.5, color: err ? c.dangerText : c.muted)),
             ])),
           ]),
         if (f.status == 'uploading')
-          Positioned(left: 0, right: 0, bottom: 0, child: LinearProgressIndicator(value: f.progress, minHeight: 3, color: NetbarColors.accent, backgroundColor: c.fill)),
+          Positioned(left: 0, right: 0, bottom: 0, child: LinearProgressIndicator(value: f.progress, minHeight: 3, color: NT.accent, backgroundColor: c.fill)),
       ]),
     );
     return Stack(clipBehavior: Clip.none, children: [
@@ -216,21 +247,31 @@ class PendingFileCard extends StatelessWidget {
           if (isImg) showImageViewer(context, f.preview!, f.name);
           if (f.pasted && f.text != null) showTextViewer(context, '粘贴的文本', f.text!);
         },
-        child: Tooltip(message: err ? '${f.name}：${f.error}' : f.name, child: card),
+        child: s.isDesktop ? Tooltip(message: err ? '${f.name}：${f.error}' : f.name, child: card) : card,
       ),
+      // 删除按钮：看起来是个小圆点，手机上能点的区域有 32
       Positioned(
-        top: 3,
-        right: 3,
+        top: s.isMobile ? -6 : 3,
+        right: s.isMobile ? -6 : 3,
         child: Semantics(
           button: true,
-          label: '删除附件',
+          label: '删除附件${f.name}',
           child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
             onTap: () => s.controller.removeFile(f),
-            child: Container(
-              width: s.isMobile ? 22 : 18,
-              height: s.isMobile ? 22 : 18,
-              decoration: const BoxDecoration(color: Color(0x99000000), shape: BoxShape.circle),
-              child: Icon(Icons.close, size: s.isMobile ? 14 : 12, color: Colors.white),
+            child: MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: Container(
+                width: s.isMobile ? 32 : 18,
+                height: s.isMobile ? 32 : 18,
+                alignment: Alignment.center,
+                child: Container(
+                  width: s.isMobile ? 20 : 18,
+                  height: s.isMobile ? 20 : 18,
+                  decoration: const BoxDecoration(color: Color(0xAA000000), shape: BoxShape.circle),
+                  child: Icon(Icons.close, size: 12, color: Colors.white),
+                ),
+              ),
             ),
           ),
         ),
