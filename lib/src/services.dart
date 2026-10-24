@@ -1,5 +1,6 @@
 // 平台能力：图片压缩、朗读、语音输入、选文件/拍照、剪贴板里的图片和文件、保存和分享
 // 都包一层，出错一律变成给用户看的中文提示
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -72,15 +73,18 @@ const allowedExtensions = [
   'ppt'
 ];
 
+// 用的是 file_picker 9.x 的写法（FilePicker.platform），和宿主项目锁定的版本一致
 Future<List<PickedFile>> pickFiles() async {
-  final list = await FilePicker.pickFiles(type: FileType.custom, allowedExtensions: allowedExtensions);
-  return [for (final f in list) (bytes: await f.xFile.readAsBytes(), name: f.name)];
+  final r = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: allowedExtensions, allowMultiple: true, withData: true);
+  return [for (final f in r?.files ?? const <PlatformFile>[]) (bytes: f.bytes ?? await File(f.path!).readAsBytes(), name: f.name)];
 }
 
 /// 选 md / txt 文件（知识库背景知识、技能上传用），返回文件名和文字
 Future<List<({String name, String text})>> pickTextFiles() async {
-  final list = await FilePicker.pickFiles(type: FileType.custom, allowedExtensions: const ['md', 'markdown', 'txt']);
-  return [for (final f in list) (name: f.name, text: await f.xFile.readAsString())];
+  final r = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: const ['md', 'markdown', 'txt'], allowMultiple: true, withData: true);
+  return [
+    for (final f in r?.files ?? const <PlatformFile>[]) (name: f.name, text: utf8.decode(f.bytes ?? await File(f.path!).readAsBytes(), allowMalformed: true)),
+  ];
 }
 
 /// 手机上拍照或从相册选（相册可以多选）；图片在这一步就先压小
@@ -111,13 +115,19 @@ Future<void> copyText(String text) => Clipboard.setData(ClipboardData(text: text
 
 /// 保存附件：电脑上弹出“另存为”，手机上用系统分享（存到文件、发给别人）
 Future<bool> saveFile(Uint8List bytes, String name) async {
-  if (isDesktopPlatform) return await FilePicker.saveFile(fileName: name, bytes: bytes) != null;
-  final r = await SharePlus.instance.share(ShareParams(files: [XFile.fromData(bytes, name: name)], fileNameOverrides: [name]));
+  if (isDesktopPlatform) {
+    // 电脑上 saveFile 只返回选好的路径，文件要自己写
+    final path = await FilePicker.platform.saveFile(fileName: name, bytes: bytes);
+    if (path == null) return false;
+    await File(path).writeAsBytes(bytes);
+    return true;
+  }
+  final r = await Share.shareXFiles([XFile.fromData(bytes, name: name)], fileNameOverrides: [name]);
   return r.status == ShareResultStatus.success;
 }
 
 /// 手机上用系统分享面板发链接
-Future<void> shareText(String text, {String? subject, Rect? origin}) => SharePlus.instance.share(ShareParams(text: text, subject: subject, sharePositionOrigin: origin));
+Future<void> shareText(String text, {String? subject, Rect? origin}) => Share.share(text, subject: subject, sharePositionOrigin: origin);
 
 // ---------- 朗读：系统自带的语音合成，同一时间只读一条 ----------
 class Reader {
@@ -214,7 +224,10 @@ class Dictation {
       return onEnd(Platform.isAndroid ? '这台手机没有可用的语音识别服务（很多国产手机需要安装或打开系统自带的语音识别），也可能是没有给麦克风权限。' : '当前设备不支持语音输入，或者没有给麦克风和语音识别权限。');
     }
     await _stt.listen(
-      listenOptions: SpeechListenOptions(localeId: 'zh_CN', partialResults: true, cancelOnError: true, listenMode: ListenMode.dictation, autoPunctuation: true),
+      // speech_to_text 7.0 的 SpeechListenOptions 里还没有 localeId，用 listen 自己的参数（7.x 都能用）
+      // ignore: deprecated_member_use
+      localeId: 'zh_CN',
+      listenOptions: SpeechListenOptions(partialResults: true, cancelOnError: true, listenMode: ListenMode.dictation, autoPunctuation: true),
       onResult: (r) => r.finalResult ? onFinal(r.recognizedWords) : onPartial(r.recognizedWords),
     );
   }

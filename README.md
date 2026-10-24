@@ -65,6 +65,38 @@ Navigator.of(context).push(MaterialPageRoute(builder: (_) => NetbarOpsView(
 - 颜色跟随你的应用主题（亮色/暗色）。
 - 只有旧链接里的 `name` 时，传 `name: '富贵测试组-远程部-WIN-20260917-192.168.11.110'`，会自动拆分。
 
+## 连接参数从哪里来
+
+`NetbarOpsConfig` 有三个必填项：
+
+| 参数 | 是什么 | 从哪里来 |
+|---|---|---|
+| `baseUrl` | 网吧经营管家后台地址 | 固定的：`https://e2e7eb00512d98de5d216730825b1499.app.wbtun.com` |
+| `mcpUrl` | 这台机器的远程运维地址，形如 `https://rtc2.03kan.com/mcp/机器编号` | 由 03kan 远程运维系统生成 |
+| `token` | 连接这台机器用的令牌 | 由 03kan 远程运维系统生成 |
+
+网页版是 03kan 网站在 iframe 里打开 `…/ops?mcp=…&token=…&netbarGroup=…&netbarName=…&netbarSeat=…&netbarIp=…`，这些参数是 03kan 那边拼好传进来的。
+Flutter 应用里要用同样的值：找到 03kan 生成这个远程运维链接的地方（通常在 03kan 的后台接口里，客户端代码里不一定搜得到），从那里拿 `mcp` 和 `token`。网吧分组、名称、机位、IP 是可选的，有的话也一起传。
+
+## 版本要求
+
+- Flutter 3.27 及以上（Dart 3.6 及以上）。
+- 依赖的插件都放宽了版本范围，方便和你的项目共存。已经验证过“全部用最低版本”和“全部用最高版本”两种情况都能编译通过：
+
+| 插件 | 支持的版本 |
+|---|---|
+| file_picker | 9.2.3 – 9.x（用 `FilePicker.platform` 的写法） |
+| share_plus | 10.1.4 – 10.x（用 `Share.share` / `Share.shareXFiles` 的写法） |
+| desktop_drop | 0.7.1 – 0.8.x |
+| http | 1.1 – 1.x |
+| shared_preferences | 2.2 – 2.x |
+| image_picker | 1.0 – 1.x |
+| image | 4.1 – 4.x |
+| flutter_tts | 4.0 – 4.x |
+| speech_to_text | 7.0 – 7.x |
+| pasteboard | 0.3 – 0.x |
+| cupertino_icons | 1.0.6 – 2.x |
+
 ## 各平台需要的权限设置
 
 **iOS**（`ios/Runner/Info.plist`）：
@@ -94,7 +126,6 @@ Navigator.of(context).push(MaterialPageRoute(builder: (_) => NetbarOpsView(
 - 语音输入依赖系统的语音识别：很多国产安卓手机没有谷歌语音服务，需要用手机自带的语音识别；识别不到时会给出中文提示。
 - 分享出去的链接用浏览器打开（分享页是网页）。
 - 组件里没有网页版的“亮色/暗色切换按钮”，颜色跟随你的应用主题。
-- 依赖的插件：http、shared_preferences、file_picker、image_picker、image、flutter_tts、speech_to_text、share_plus、desktop_drop、pasteboard、path_provider。
 
 ## 示例
 
