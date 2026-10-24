@@ -212,7 +212,7 @@ class SysLine extends StatelessWidget {
                 )),
           if (tail != null) TextSpan(text: tail),
         ])),
-        if (trailing != null) trailing!,
+        ?trailing,
       ]),
     );
   }

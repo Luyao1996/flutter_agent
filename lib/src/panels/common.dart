@@ -72,7 +72,7 @@ class ListRow extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
             decoration: BoxDecoration(borderRadius: BorderRadius.circular(10), border: Border.all(color: selected ? NetbarColors.accent.withValues(alpha: .5) : c.line)),
-            child: Row(children: [Expanded(child: body), if (trailing != null) trailing!]),
+            child: Row(children: [Expanded(child: body), ?trailing]),
           ),
         ),
       ),
