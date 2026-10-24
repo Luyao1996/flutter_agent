@@ -15,6 +15,9 @@ import 'attachments.dart';
 /// 输入框的标识（测试、宿主应用要找到输入框时用）
 const inputKey = ValueKey('netbar-ops-input');
 
+/// 语音输入暂时关闭（Windows 自带的语音识别效果不理想，先不提供）；代码保留，改成 true 就能重新打开
+const voiceInputEnabled = false;
+
 class Composer extends StatefulWidget {
   const Composer({super.key});
   @override
@@ -307,8 +310,9 @@ class _ComposerState extends State<Composer> {
             const SizedBox(height: 6),
             Row(children: [
               AIconButton(icon: Icons.attach_file, tooltip: '添加附件（图片、PDF、文本、Word/Excel/PPT）', onPressed: ctl.config.isValid ? () => _pick(pickFiles) : null),
-              AIconButton(
-                  icon: _recording ? Icons.mic : Icons.mic_none, color: _recording ? NT.danger : null, tooltip: _recording ? '停止语音输入' : '语音输入', onPressed: _toggleVoice),
+              if (voiceInputEnabled)
+                AIconButton(
+                    icon: _recording ? Icons.mic : Icons.mic_none, color: _recording ? NT.danger : null, tooltip: _recording ? '停止语音输入' : '语音输入', onPressed: _toggleVoice),
               AIconButton(
                   icon: Icons.alternate_email,
                   tooltip: '推荐知识库里的经验、背景知识，或选一个技能运行（也可以直接输入 @）',
@@ -430,6 +434,8 @@ class _ComposerState extends State<Composer> {
             if (ctl.busy) _RoundButton(stop: true, tooltip: '停止', onPressed: ctl.stopByUser, size: 34),
             if (hasContent)
               _RoundButton(tooltip: ctl.busy ? '排队发送' : '发送', queueing: ctl.busy, onPressed: ctl.sendComposer, size: 34)
+            else if (!ctl.busy && !voiceInputEnabled)
+              const _RoundButton(tooltip: '发送', onPressed: null, size: 34)
             else if (!ctl.busy)
               _CircleIcon(
                   icon: _recording ? (s.isCupertino ? CupertinoIcons.stop_circle : Icons.stop_circle_outlined) : (s.isCupertino ? CupertinoIcons.mic : Icons.mic_none),
