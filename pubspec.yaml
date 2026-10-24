@@ -1,11 +1,11 @@
 name: netbar_ops
-description: 网吧经营管家·远程运维聊天组件（Windows / iOS / Android），对接网吧经营管家后台。
+description: "Netbar remote-ops chat widget for Windows, iOS and Android (connects to the Netbar Manager backend)."
 version: 1.0.0
 publish_to: none
 
 environment:
-  sdk: ">=3.6.0 <4.0.0"
-  flutter: ">=3.27.0"
+  sdk: ">=3.10.0 <4.0.0"
+  flutter: ">=3.38.0"
 
 dependencies:
   cupertino_icons: ">=1.0.6 <3.0.0"

@@ -1,5 +1,5 @@
 name: netbar_ops_example
-description: 网吧经营管家·远程运维聊天组件的示例应用
+description: "Example app for the netbar_ops widget."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
