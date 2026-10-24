@@ -1,4 +1,4 @@
-name: netbar_ops
+name: netbar_ops_agent
 description: 网吧经营管家·远程运维聊天组件（Windows / iOS / Android），对接网吧经营管家后台。
 version: 1.0.0
 publish_to: none
