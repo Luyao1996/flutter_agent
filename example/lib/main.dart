@@ -1,7 +1,7 @@
 // 示例：填上后台地址和远程机器的连接信息，运行后就是完整的远程运维聊天界面
 // Windows 用桌面布局，iPhone 用苹果的设计语言，安卓手机用 Material 设计语言
 import 'package:flutter/material.dart';
-import 'package:netbar_ops_agent/netbar_ops_agent.dart';
+import 'package:netbar_ops/netbar_ops.dart';
 
 void main() => runApp(const ExampleApp());
 

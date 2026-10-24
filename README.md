@@ -1,4 +1,4 @@
-# netbar_ops_agent：网吧经营管家·远程运维聊天组件（Flutter）
+# netbar_ops：网吧经营管家·远程运维聊天组件（Flutter）
 
 把网页版“远程运维”的全部功能做成一个 Flutter 组件，支持 **Windows、iOS、Android**。组件直接连接现有的网吧经营管家后台，后台不用改。
 
@@ -36,18 +36,18 @@
 
 ```yaml
 dependencies:
-  netbar_ops_agent:
+  netbar_ops:
     git:
       url: https://github.com/Luyao1996/flutter_agent.git
       ref: main
 ```
 
-然后运行 `flutter pub get`。以后组件更新了，运行 `flutter pub upgrade netbar_ops_agent`。
+然后运行 `flutter pub get`。以后组件更新了，运行 `flutter pub upgrade netbar_ops`。
 
 在一个页面里放上组件（它自带顶栏和输入区，直接作为整页使用）：
 
 ```dart
-import 'package:netbar_ops_agent/netbar_ops_agent.dart';
+import 'package:netbar_ops/netbar_ops.dart';
 
 Navigator.of(context).push(MaterialPageRoute(builder: (_) => NetbarOpsView(
   config: NetbarOpsConfig(

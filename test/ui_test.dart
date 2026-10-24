@@ -6,10 +6,10 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:netbar_ops_agent/netbar_ops_agent.dart';
-import 'package:netbar_ops_agent/src/api.dart';
-import 'package:netbar_ops_agent/src/panels/kb_panel.dart' show KbPanel;
-import 'package:netbar_ops_agent/src/ui/composer.dart' show inputKey;
+import 'package:netbar_ops/netbar_ops.dart';
+import 'package:netbar_ops/src/api.dart';
+import 'package:netbar_ops/src/panels/kb_panel.dart' show KbPanel;
+import 'package:netbar_ops/src/ui/composer.dart' show inputKey;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fake_backend.dart';

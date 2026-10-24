@@ -1,11 +1,11 @@
 // 逻辑测试：轮次树和版本、配置解析、发送和实时返回、排队、@ 推荐、操作确认
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:netbar_ops_agent/netbar_ops_agent.dart';
-import 'package:netbar_ops_agent/src/api.dart';
-import 'package:netbar_ops_agent/src/models.dart';
-import 'package:netbar_ops_agent/src/panels/skills_panel.dart';
-import 'package:netbar_ops_agent/src/services.dart';
+import 'package:netbar_ops/netbar_ops.dart';
+import 'package:netbar_ops/src/api.dart';
+import 'package:netbar_ops/src/models.dart';
+import 'package:netbar_ops/src/panels/skills_panel.dart';
+import 'package:netbar_ops/src/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fake_backend.dart';
