@@ -9,6 +9,7 @@ import '../controller.dart';
 import '../models.dart';
 import '../panels/skills_panel.dart';
 import '../services.dart';
+import '../voice/call_screen.dart';
 import 'adaptive.dart';
 import 'attachments.dart';
 
@@ -200,6 +201,17 @@ class _ComposerState extends State<Composer> {
     if (r != null && mounted) ctl.setHarness(r);
   }
 
+  /// 开始/回到语音通话：没开就先连（要麦克风权限），成功后进全屏通话界面
+  Future<void> _openCall() async {
+    final ctl = _ctl!;
+    if (ctl.voice.on) {
+      ctl.voice.openScreen();
+      if (mounted) showCallScreen(context);
+      return;
+    }
+    if (await ctl.voice.enter() && mounted) showCallScreen(context);
+  }
+
   /// 手机上的“＋”菜单
   Future<void> _plusMenu() async {
     final ctl = _ctl!;
@@ -248,11 +260,18 @@ class _ComposerState extends State<Composer> {
           Expanded(child: Text(_interim.isEmpty ? '正在听，请说话…' : _interim, maxLines: 3, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: NT.fSmall, color: c.muted))),
         ]),
     ];
-    final top = <Widget>[
-      if (ctl.queue.isNotEmpty) _QueueBox(ctl),
-      if (ctl.mentionOpen) _MentionList(ctl),
-    ];
-    return s.isDesktop ? _desktop(context, ctl, extras, top) : _mobile(context, ctl, extras, top);
+    // 语音通话状态变化（开始/结束/收起）时也要重建：小状态条和通话按钮都跟着变
+    return ListenableBuilder(
+      listenable: ctl.voice,
+      builder: (context, _) {
+        final top = <Widget>[
+          if (ctl.voice.on && !ctl.voice.expanded) const CompactVoiceBar(),
+          if (ctl.queue.isNotEmpty) _QueueBox(ctl),
+          if (ctl.mentionOpen) _MentionList(ctl),
+        ];
+        return s.isDesktop ? _desktop(context, ctl, extras, top) : _mobile(context, ctl, extras, top);
+      },
+    );
   }
 
   Widget _contentInsert(Widget Function(ContentInsertionConfiguration) build) => build(ContentInsertionConfiguration(
@@ -310,6 +329,11 @@ class _ComposerState extends State<Composer> {
             const SizedBox(height: 6),
             Row(children: [
               AIconButton(icon: Icons.attach_file, tooltip: '添加附件（图片、PDF、文本、Word/Excel/PPT）', onPressed: ctl.config.isValid ? () => _pick(pickFiles) : null),
+              AIconButton(
+                  icon: Icons.graphic_eq,
+                  color: ctl.voice.on ? NT.accent : null,
+                  tooltip: '语音通话：像打电话一样和 AI 说话，可以随时打断',
+                  onPressed: ctl.config.isValid ? _openCall : null),
               if (voiceInputEnabled)
                 AIconButton(
                     icon: _recording ? Icons.mic : Icons.mic_none, color: _recording ? NT.danger : null, tooltip: _recording ? '停止语音输入' : '语音输入', onPressed: _toggleVoice),
@@ -428,6 +452,11 @@ class _ComposerState extends State<Composer> {
           final hasContent = value.text.trim().isNotEmpty || ctl.files.isNotEmpty || ctl.skill != null;
           return Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
             _CircleIcon(icon: s.isCupertino ? CupertinoIcons.add_circled : Icons.add_circle_outline, tooltip: '添加附件、技能、总结', onPressed: ctl.config.isValid ? _plusMenu : null),
+            _CircleIcon(
+                icon: s.isCupertino ? CupertinoIcons.waveform : Icons.graphic_eq,
+                color: ctl.voice.on ? NT.accent : null,
+                tooltip: '语音通话',
+                onPressed: ctl.config.isValid ? _openCall : null),
             const SizedBox(width: 4),
             Expanded(child: field),
             const SizedBox(width: 4),

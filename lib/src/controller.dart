@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'api.dart';
 import 'config.dart';
 import 'models.dart';
+import 'voice/voice_call.dart';
 
 /// 输入区里待发送的附件
 class PendingFile {
@@ -99,6 +100,25 @@ class ChatController extends ChangeNotifier {
   final NetbarOpsConfig config;
   final NetbarApi api;
   final ImageShrinker? shrinkImage;
+
+  /// 语音通话（用到时才建；没开通话时这些钩子都是空操作）
+  VoiceCallController? _voice;
+  VoiceCallController get voice => _voice ??= VoiceCallController(this);
+
+  /// 这一轮结束时给前台播报的“屏幕上列出的几个办法”
+  List<String> get diagOptionTitles =>
+      _diagOptions?.map((o) => o.detail.isEmpty ? o.title : '${o.title}：${o.detail}').toList() ?? const [];
+
+  /// 语音里把要做的事交给 AI 处理：忙就排队，不忙就直接发
+  void sendVoiceObjective(String text) {
+    if (text.trim().isEmpty) return;
+    final o = SendOptions(text: text);
+    if (busy) {
+      enqueue(o);
+    } else {
+      send(o);
+    }
+  }
 
   // ---------- 提示：界面层注册，用来弹出小提示和确认框 ----------
   void Function(String message)? onToast;
@@ -371,6 +391,7 @@ class ChatController extends ChangeNotifier {
 
   /// 这一轮中途出错（连接断了等）：在这一轮里显示原因，并算作已结束（反馈、重新生成按钮照常出现）
   void _failLive(String message) {
+    if (_voice?.on == true) _voice!.onRunError(message);
     final t = liveTurn == null ? null : tree.turns[liveTurn];
     if (t == null || t.done) {
       notes.add(LocalNote('error', message));
@@ -431,6 +452,8 @@ class ChatController extends ChangeNotifier {
     }
     if (summarize && _kbSavedCount == 0) note(LocalNote('sys', '这次没有记录新的经验'));
     liveTurn = null;
+    // 这一轮结束了：把结果交给前台去说（放在清掉 liveTurn 之后，options 已经齐了）
+    if (_voice?.on == true) _voice!.onRunEnded(diagOptionTitles);
     _changed();
     // 接着处理排队的消息
     if (!_disposed) scheduleMicrotask(runQueue);
@@ -483,26 +506,36 @@ class ChatController extends ChangeNotifier {
         }
         streamingText = null;
         _setThinking(true);
+        if (_voice?.on == true) _voice!.onAgentText(splitOptions(str(d['text'])).text);
       case 'tool_use':
         // 远程机器的工具名不带 mcp__ 前缀（知识库工具带）
         if (!str(d['name']).startsWith('mcp__')) _remoteCalls.add(str(d['id']));
         _setThinking(true, 'AI 正在调用工具…');
+        if (_voice?.on == true) _voice!.onAgentTool();
       case 'auto_approved':
         _setThinking(true, 'AI 正在调用工具…');
+        if (_voice?.on == true) {
+          _voice!.onAgentTool();
+          _voice!.onApprovalDone(str(d['id']), true);
+        }
       case 'tool_result':
         if (d['isError'] != true && _remoteCalls.contains(str(d['id']))) mcpStatus = 'connected';
         _setThinking(true);
       case 'approval':
         _setThinking(false);
+        if (_voice?.on == true) _voice!.onApproval(d);
       case 'approval_done':
         _setThinking(true, d['allow'] == true ? 'AI 正在调用工具…' : 'AI 正在处理…');
+        if (_voice?.on == true) _voice!.onApprovalDone(str(d['id']), d['allow'] == true);
       case 'kb_saved':
         _kbSavedCount++;
       case 'auto_mode':
         autoApprove = true;
       case 'done':
+        _setThinking(false);
       case 'error':
         _setThinking(false);
+        if (_voice?.on == true) _voice!.onRunError(str(d['error']));
     }
     notifyListeners();
   }
@@ -525,6 +558,7 @@ class ChatController extends ChangeNotifier {
 
   void _setBusy(bool b) {
     busy = b;
+    if (_voice?.on == true) _voice!.onBusy(b);
     notifyListeners();
   }
 
@@ -1053,6 +1087,7 @@ class ChatController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _voice?.dispose();
     _cancelStream();
     queue.clear();
     _diagTimer?.cancel();
