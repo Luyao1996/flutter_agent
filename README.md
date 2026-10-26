@@ -27,6 +27,7 @@
 - @ 推荐经验、背景知识或选技能，模糊搜索；技能手动运行
 - 语音输入：暂时关闭（不显示麦克风按钮）。代码保留，把 lib/src/ui/composer.dart 里的 `voiceInputEnabled` 改成 true 可以重新打开
 - **语音通话（前台 + 主管）**：像打电话一样和 AI 说话，随时打断。全屏通话界面（声波球随状态变化、你和 AI 的最近几句话用气泡显示并自动淡出）；左上角“收起”回到聊天界面、通话不中断，输入栏上方会出现小状态条，可随时展开或结束；通话中能切换说话的声音、开关麦克风。要动电脑的事交给当前选中的 AI 处理，确认高危操作、派发任务、播报结果都和文字对话打通。手机和 PC 都支持（实时音频：`record` 采集 16kHz，`flutter_soloud` 播放 24kHz）
+- **操作本网吧其他电脑（多机 toolbox）**：传了 `toolboxToken` 等参数后，AI 可以连接并操作本网吧的其他电脑；输入框上方显示已连接的电脑，可单独或全部断开；开新对话/关闭组件时自动断开。需要后台 v1.22.0 及以上
 - 分享只读链接（手机上用系统分享面板发出去）
 - 记忆（这家网吧 / 这台机器）、知识库、技能的管理
 - 历史对话：查看、接着问、改名、调试模式下删除
@@ -59,6 +60,9 @@ Navigator.of(context).push(MaterialPageRoute(builder: (_) => NetbarOpsView(
     netbarGroup: '富贵测试组', netbarName: '远程部', netbarSeat: 'WIN-20260917', netbarIp: '192.168.11.110',
     // isClient: true,  // 自动执行模式（网页版 isclient=1）
     // isDebug: true,   // 调试模式（网页版 isdebug=1），可以删除对话
+    // 操作本网吧其他电脑（多机）——和网页版链接里的 toolboxToken / merchant_id / sfuroom / sfuaddr 一一对应；
+    // 不传 toolboxToken 就没有多机功能：
+    // toolboxToken: 'admin 登录令牌', merchantId: '网吧编号', sfuRoom: '当前电脑房间号', sfuAddr: '中转服务器地址',
   ),
 )));
 ```

@@ -405,6 +405,10 @@ class TurnView extends StatelessWidget {
           children.add(SysLine(icon: Icons.info_outline, text: str(d['text']), color: c.warnText));
         case 'auto_mode':
           children.add(const SysLine(icon: Icons.bolt, text: '已开启“本次会话始终允许”，高危操作仍需手动确认'));
+        case 'machine_connected':
+          children.add(SysLine(icon: Icons.link, text: '已连接本网吧的另一台电脑：${str(d['seat'])}${str(d['name']).isNotEmpty ? '（${str(d['name'])}）' : ''}'));
+        case 'machine_disconnected':
+          children.add(SysLine(icon: Icons.link_off, text: '已断开 ${str(d['seat'])}'));
         case 'done':
           if (d['isError'] == true) {
             children.add(ErrorBubble(d['subtype'] == 'error_max_turns'

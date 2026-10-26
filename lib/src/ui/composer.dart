@@ -266,6 +266,7 @@ class _ComposerState extends State<Composer> {
       builder: (context, _) {
         final top = <Widget>[
           if (ctl.voice.on && !ctl.voice.expanded) const CompactVoiceBar(),
+          if (ctl.otherMachines.isNotEmpty) _OtherMachinesBar(ctl),
           if (ctl.queue.isNotEmpty) _QueueBox(ctl),
           if (ctl.mentionOpen) _MentionList(ctl),
         ];
@@ -774,6 +775,47 @@ class _QueueBox extends StatelessWidget {
               AIconButton(icon: Icons.close, tooltip: '删除', size: 16, onPressed: () => ctl.removeQueued(ctl.queue[i])),
             ]),
           ),
+      ]),
+    );
+  }
+}
+
+/// 已连接的本网吧其他电脑：每台一个标签，带断开按钮（断开会停掉那台电脑上的 AI 助手）
+class _OtherMachinesBar extends StatelessWidget {
+  const _OtherMachinesBar(this.ctl);
+  final ChatController ctl;
+  @override
+  Widget build(BuildContext context) {
+    final c = NetbarColors(context);
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 6, 6, 6),
+      decoration: BoxDecoration(
+          color: Color.alphaBlend(NT.accent.withValues(alpha: .05), c.card), borderRadius: BorderRadius.circular(NT.rMd), border: Border.all(color: NT.accent.withValues(alpha: .35))),
+      child: Row(children: [
+        Icon(Icons.devices_other, size: 14, color: c.accentText),
+        const SizedBox(width: 6),
+        Text('其他电脑', style: TextStyle(fontSize: NT.fCaption, color: c.accentText)),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              for (final m in ctl.otherMachines)
+                Tooltip(
+                  message: m.label,
+                  child: Container(
+                    padding: const EdgeInsets.fromLTRB(8, 3, 2, 3),
+                    decoration: BoxDecoration(color: c.fill, borderRadius: BorderRadius.circular(NT.rSm), border: Border.all(color: c.line)),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Text(m.seat, style: monoStyle(size: 12)),
+                      AIconButton(icon: Icons.close, tooltip: '断开 ${m.seat}，并停止它上面的 AI 助手', size: 14, onPressed: ctl.busy ? null : () => ctl.disconnectMachine(m.seat)),
+                    ]),
+                  ),
+                ),
+            ],
+          ),
+        ),
       ]),
     );
   }

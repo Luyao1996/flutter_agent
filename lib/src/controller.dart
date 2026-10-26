@@ -151,6 +151,9 @@ class ChatController extends ChangeNotifier {
   bool busy = false;
   String? taskId;
   String? liveTurn;
+
+  /// 本网吧里当前已连接、可一起操作的其他电脑（多机 toolbox，没配 toolboxToken 时一直为空）
+  List<OtherMachine> otherMachines = [];
   bool thinking = false;
   String thinkingText = 'AI 正在处理…';
   bool showStartChoices = false;
@@ -373,6 +376,8 @@ class ChatController extends ChangeNotifier {
         'sessionId': sessionId,
         'isClient': config.isClient,
         if (harnessId.isNotEmpty) 'harness': harnessId,
+        if (config.toolbox != null) 'toolbox': config.toolbox,
+        'origin': config.baseUrl, // 后台用它生成公网下载链接（share_remote_file / download_url）
       };
       await for (final (e, d) in api.stream('/api/chat', body, cancel: _streamCancel!.future)) {
         started = true;
@@ -531,8 +536,13 @@ class ChatController extends ChangeNotifier {
         _kbSavedCount++;
       case 'auto_mode':
         autoApprove = true;
+      case 'machine_connected':
+      case 'machine_disconnected':
+        // 事件本身已记进这一轮（messages.dart 会显示“已连接/已断开 X”），这里刷新顶部的其他电脑列表
+        loadOtherMachines();
       case 'done':
         _setThinking(false);
+        loadOtherMachines();
       case 'error':
         _setThinking(false);
         if (_voice?.on == true) _voice!.onRunError(str(d['error']));
@@ -611,6 +621,52 @@ class ChatController extends ChangeNotifier {
   void removeQueued(QueuedMessage item) {
     queue.remove(item);
     notifyListeners();
+  }
+
+  // ---------- 操作本网吧的其他电脑（多机 toolbox） ----------
+  /// 刷新当前已连接的其他电脑列表（没配 toolbox 或没有会话时清空）
+  Future<void> loadOtherMachines() async {
+    if (config.toolbox == null || sessionId == null) {
+      if (otherMachines.isNotEmpty) {
+        otherMachines = [];
+        notifyListeners();
+      }
+      return;
+    }
+    final sid = sessionId;
+    try {
+      final r = await api.post('/api/toolbox/status', {'sessionId': sid});
+      if (sessionId == sid && !_disposed) {
+        otherMachines = asList(r['machines']).map((m) => OtherMachine.fromJson(asMap(m))).toList();
+        notifyListeners();
+      }
+    } catch (_) {}
+  }
+
+  /// 断开其中一台（seat=null 断开全部）；会停掉那台电脑上的 AI 助手
+  Future<void> disconnectMachine([String? seat]) async {
+    if (busy) {
+      toast('AI 正在处理，等这一轮结束后再断开');
+      return;
+    }
+    try {
+      final body = <String, dynamic>{'sessionId': sessionId};
+      if (seat != null) body['seat'] = seat;
+      final r = await api.post('/api/toolbox/disconnect', body);
+      otherMachines = asList(r['machines']).map((m) => OtherMachine.fromJson(asMap(m))).toList();
+      if (seat != null) notes.add(LocalNote('sys', '已断开 $seat'));
+      notifyListeners();
+    } on ApiError catch (e) {
+      toast(e.message);
+    }
+  }
+
+  // 开新对话/关闭前：把这个会话连着的其他电脑都断开（停掉那些电脑上的 AI 助手）
+  void _disconnectAllMachines() {
+    if (sessionId != null && otherMachines.isNotEmpty) {
+      api.post('/api/toolbox/disconnect', {'sessionId': sessionId}).catch_();
+    }
+    otherMachines = [];
   }
 
   // ---------- 操作确认 ----------
@@ -756,6 +812,7 @@ class ChatController extends ChangeNotifier {
   // ---------- 对话：新建、打开、改名、删除 ----------
   void _reset() {
     if (autoApprove && sessionId != null) api.post('/api/auto-approve/off', {'sessionId': sessionId}).catch_();
+    _disconnectAllMachines();
     _cancelStream();
     autoApprove = false;
     streamingText = null;
@@ -812,6 +869,7 @@ class ChatController extends ChangeNotifier {
     sessionInfo = restoring ? '对话进行中' : '历史对话 · ${fmtTime(DateTime.tryParse(str(session['createdAt']))?.toLocal())} 开始';
     historyNote = !running && !restoring;
     _changed();
+    loadOtherMachines();
     if (running) _attachRunning();
     return true;
   }
@@ -1087,6 +1145,7 @@ class ChatController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _disconnectAllMachines();
     _voice?.dispose();
     _cancelStream();
     queue.clear();

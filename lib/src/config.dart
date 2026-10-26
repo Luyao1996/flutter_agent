@@ -19,6 +19,10 @@ class NetbarOpsConfig {
     this.barId = '',
     this.isClient = false,
     this.isDebug = false,
+    this.toolboxToken = '',
+    this.merchantId = '',
+    this.sfuRoom = '',
+    this.sfuAddr = '',
     this.uiStyle,
   });
 
@@ -47,10 +51,22 @@ class NetbarOpsConfig {
   /// 调试模式（网页版 isdebug=1）：可以删除对话
   final bool isDebug;
 
+  /// 操作本网吧其他电脑（网页版链接里的 toolboxToken、merchant_id、sfuroom、sfuaddr）：
+  /// admin 登录令牌、网吧编号、当前电脑的房间号、中转服务器地址。不传 toolboxToken 就没有多机功能。
+  final String toolboxToken;
+  final String merchantId;
+  final String sfuRoom;
+  final String sfuAddr;
+
   /// 指定界面风格；不填按平台自动选择
   final NetbarUiStyle? uiStyle;
 
   bool get isValid => mcpUrl.trim().isNotEmpty && token.trim().isNotEmpty;
+
+  /// 发给后台的多机配置（没有 toolboxToken 就是 null，表示没有多机功能）
+  Map<String, dynamic>? get toolbox => toolboxToken.trim().isEmpty
+      ? null
+      : {'token': toolboxToken.trim(), 'merchantId': merchantId.trim(), 'room': sfuRoom.trim(), 'sfu': sfuAddr.trim()};
 
   /// 网吧属性：没传分组/名称/机位/IP 时从 name 里拆；机位还是空就用 MCP 地址最后一段
   Map<String, String> get netbar {
@@ -106,6 +122,10 @@ class NetbarOpsConfig {
         barId: barId,
         isClient: isClient,
         isDebug: isDebug ?? this.isDebug,
+        toolboxToken: toolboxToken,
+        merchantId: merchantId,
+        sfuRoom: sfuRoom,
+        sfuAddr: sfuAddr,
         uiStyle: uiStyle ?? this.uiStyle,
       );
 }

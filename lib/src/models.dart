@@ -214,6 +214,14 @@ class MemoryItem {
   DateTime? get updatedAt => DateTime.tryParse(str(raw['updatedAt']))?.toLocal();
 }
 
+/// 本网吧里当前已连接、可以一起操作的其他电脑（多机 toolbox）
+class OtherMachine {
+  OtherMachine({required this.seat, required this.name, required this.ip});
+  final String seat, name, ip;
+  factory OtherMachine.fromJson(Map<String, dynamic> j) => OtherMachine(seat: str(j['seat']), name: str(j['name']), ip: str(j['ip']));
+  String get label => [seat, name, ip].where((s) => s.isNotEmpty).join(' · ');
+}
+
 const memoryScopeNames = {'bar': '这家网吧', 'machine': '这台机器'};
 const kbTypeNames = {'experience': '经验', 'background': '背景知识'};
 
