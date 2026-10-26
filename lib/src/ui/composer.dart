@@ -330,11 +330,6 @@ class _ComposerState extends State<Composer> {
             const SizedBox(height: 6),
             Row(children: [
               AIconButton(icon: Icons.attach_file, tooltip: '添加附件（图片、PDF、文本、Word/Excel/PPT）', onPressed: ctl.config.isValid ? () => _pick(pickFiles) : null),
-              AIconButton(
-                  icon: Icons.graphic_eq,
-                  color: ctl.voice.on ? NT.accent : null,
-                  tooltip: '语音通话：像打电话一样和 AI 说话，可以随时打断',
-                  onPressed: ctl.config.isValid ? _openCall : null),
               if (voiceInputEnabled)
                 AIconButton(
                     icon: _recording ? Icons.mic : Icons.mic_none, color: _recording ? NT.danger : null, tooltip: _recording ? '停止语音输入' : '语音输入', onPressed: _toggleVoice),
@@ -369,6 +364,12 @@ class _ComposerState extends State<Composer> {
               if (ctl.busy) ...[_RoundButton(stop: true, tooltip: '停止', onPressed: ctl.stopByUser), const SizedBox(width: 6)],
               _RoundButton(
                   tooltip: ctl.busy ? '排队发送：AI 正在处理，这一轮结束后接着处理' : '发送（Enter）', queueing: ctl.busy, onPressed: ctl.config.isValid ? ctl.sendComposer : null),
+              const SizedBox(width: 6),
+              AIconButton(
+                  icon: Icons.call,
+                  color: ctl.voice.on ? NT.accent : null,
+                  tooltip: '语音通话：像打电话一样和 AI 说话，可以随时打断',
+                  onPressed: ctl.config.isValid ? _openCall : null),
             ]),
           ]),
         ),
@@ -453,11 +454,6 @@ class _ComposerState extends State<Composer> {
           final hasContent = value.text.trim().isNotEmpty || ctl.files.isNotEmpty || ctl.skill != null;
           return Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
             _CircleIcon(icon: s.isCupertino ? CupertinoIcons.add_circled : Icons.add_circle_outline, tooltip: '添加附件、技能、总结', onPressed: ctl.config.isValid ? _plusMenu : null),
-            _CircleIcon(
-                icon: s.isCupertino ? CupertinoIcons.waveform : Icons.graphic_eq,
-                color: ctl.voice.on ? NT.accent : null,
-                tooltip: '语音通话',
-                onPressed: ctl.config.isValid ? _openCall : null),
             const SizedBox(width: 4),
             Expanded(child: field),
             const SizedBox(width: 4),
@@ -472,6 +468,12 @@ class _ComposerState extends State<Composer> {
                   tooltip: _recording ? '停止语音输入' : '语音输入',
                   color: _recording ? NT.danger : null,
                   onPressed: ctl.config.isValid ? _toggleVoice : null),
+            // 语音通话：电话图标，放在发送按钮右侧
+            _CircleIcon(
+                icon: s.isCupertino ? CupertinoIcons.phone : Icons.call,
+                color: ctl.voice.on ? NT.accent : null,
+                tooltip: '语音通话',
+                onPressed: ctl.config.isValid ? _openCall : null),
           ]);
         },
       ),
