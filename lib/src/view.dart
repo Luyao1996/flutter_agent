@@ -34,7 +34,6 @@ class NetbarOpsView extends StatefulWidget {
 
 class _NetbarOpsViewState extends State<NetbarOpsView> {
   late final ChatController _ctl = widget.controller ?? ChatController(widget.config, shrinkImage: services.shrinkImage);
-  final _reader = services.Reader();
   final _dictation = services.Dictation();
   final _messenger = GlobalKey<ScaffoldMessengerState>();
   final _nav = GlobalKey<NavigatorState>();
@@ -47,7 +46,6 @@ class _NetbarOpsViewState extends State<NetbarOpsView> {
 
   @override
   void dispose() {
-    _reader.stop();
     _dictation.cancel();
     _ctl.onToast = null;
     _ctl.onConfirmReplace = null;
@@ -90,7 +88,6 @@ class _NetbarOpsViewState extends State<NetbarOpsView> {
     return NetbarScope(
       controller: _ctl,
       style: style,
-      reader: _reader,
       dictation: _dictation,
       messengerKey: _messenger,
       child: Theme(

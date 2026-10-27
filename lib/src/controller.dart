@@ -127,7 +127,7 @@ class ChatController extends ChangeNotifier {
   Future<bool> Function(List<String> executedOps)? onConfirmReplace;
   void toast(String m) => onToast?.call(m);
 
-  /// 界面状态变了（例如朗读开始、结束）时让界面刷新
+  /// 界面状态变了时让界面刷新
   void refresh() => notifyListeners();
 
   /// 组件关掉以后不再刷新界面
@@ -167,7 +167,6 @@ class ChatController extends ChangeNotifier {
   /// 本轮自动检查得到的问题选项，以及哪些选项已经点过
   final Set<String> lockedOptions = {};
   String? editingTurn;
-  String? speakingTurn;
   TurnTree? _tree;
   List<DiagOption>? _diagOptions;
   int _kbSavedCount = 0;

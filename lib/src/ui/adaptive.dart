@@ -9,12 +9,11 @@ import '../config.dart';
 import '../controller.dart';
 import '../services.dart';
 
-/// 组件内共享：聊天逻辑、界面风格、朗读、语音输入、小提示显示在哪
+/// 组件内共享：聊天逻辑、界面风格、语音输入、小提示显示在哪
 class NetbarScope extends InheritedNotifier<ChatController> {
-  const NetbarScope({super.key, required ChatController controller, required this.style, required this.reader, required this.dictation, required this.messengerKey, required super.child})
+  const NetbarScope({super.key, required ChatController controller, required this.style, required this.dictation, required this.messengerKey, required super.child})
       : super(notifier: controller);
   final NetbarUiStyle style;
-  final Reader reader;
   final Dictation dictation;
 
   /// 小提示（Snackbar）显示在组件自己的范围里，不跑到宿主应用的窗口底部
@@ -27,7 +26,7 @@ class NetbarScope extends InheritedNotifier<ChatController> {
   bool get isMobile => !isDesktop;
 
   NetbarScope copyWith({required Widget child, GlobalKey<ScaffoldMessengerState>? messengerKey}) =>
-      NetbarScope(controller: controller, style: style, reader: reader, dictation: dictation, messengerKey: messengerKey ?? this.messengerKey, child: child);
+      NetbarScope(controller: controller, style: style, dictation: dictation, messengerKey: messengerKey ?? this.messengerKey, child: child);
 
   static NetbarScope of(BuildContext context) => context.dependOnInheritedWidgetOfExactType<NetbarScope>()!;
 
@@ -233,7 +232,7 @@ class AButton extends StatelessWidget {
   }
 }
 
-/// 小图标按钮（消息下方的复制、朗读等）：手机上点击区域 44，图标本身小一些
+/// 小图标按钮（消息下方的复制、点赞等）：手机上点击区域 44，图标本身小一些
 class AIconButton extends StatelessWidget {
   const AIconButton({super.key, required this.icon, required this.tooltip, required this.onPressed, this.color, this.size = 17});
   final IconData icon;

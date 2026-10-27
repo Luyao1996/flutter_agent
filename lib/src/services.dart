@@ -1,4 +1,4 @@
-// 平台能力：图片压缩、朗读、语音输入、选文件/拍照、剪贴板里的图片和文件、保存和分享
+// 平台能力：图片压缩、语音输入、选文件/拍照、剪贴板里的图片和文件、保存和分享
 // 都包一层，出错一律变成给用户看的中文提示
 import 'dart:convert';
 import 'dart:io';
@@ -6,7 +6,6 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_tts/flutter_tts.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:pasteboard/pasteboard.dart';
@@ -149,61 +148,6 @@ Future<bool> saveFile(Uint8List bytes, String name, {Rect? origin}) async {
 
 /// 手机上用系统分享面板发链接
 Future<void> shareText(String text, {String? subject, Rect? origin}) => Share.share(text, subject: subject, sharePositionOrigin: origin);
-
-// ---------- 朗读：系统自带的语音合成，同一时间只读一条 ----------
-class Reader {
-  final FlutterTts _tts = FlutterTts();
-  bool _ready = false;
-  VoidCallback? _onDone;
-
-  /// 去掉 Markdown 符号和代码块，读起来顺一些
-  static String plainText(String text) => text
-      .replaceAll(RegExp(r'```[\s\S]*?```'), '（代码略）')
-      .replaceAllMapped(RegExp(r'`([^`\n]+)`'), (m) => m.group(1)!)
-      .replaceAll(RegExp(r'^\s*\|?[\s:|-]+\|?\s*$', multiLine: true), '')
-      .replaceAll('|', '，')
-      .replaceAll(RegExp(r'^#{1,6}\s+', multiLine: true), '')
-      .replaceAllMapped(RegExp(r'\*\*([^*\n]+)\*\*'), (m) => m.group(1)!)
-      .replaceAll(RegExp(r'^\s*([-*]|>)\s+', multiLine: true), '')
-      .replaceAll(RegExp(r'<[^>]+>'), '')
-      .replaceAll(RegExp(r'\n{2,}'), '\n')
-      .trim();
-
-  Future<void> _init() async {
-    if (_ready) return;
-    _ready = true;
-    await _tts.setLanguage('zh-CN');
-    await _tts.awaitSpeakCompletion(true);
-    _tts.setCompletionHandler(() => _onDone?.call());
-    _tts.setCancelHandler(() => _onDone?.call());
-    _tts.setErrorHandler((_) => _onDone?.call());
-  }
-
-  /// 开始朗读，读完或被停止时调用 onDone；失败抛出中文提示
-  Future<void> speak(String text, VoidCallback onDone) async {
-    await stop();
-    final t = plainText(text);
-    if (t.isEmpty) return onDone();
-    try {
-      await _init();
-      _onDone = onDone;
-      await _tts.speak(t);
-    } catch (_) {
-      _onDone = null;
-      onDone();
-      throw Exception('朗读失败：这台设备的语音合成用不了');
-    }
-  }
-
-  Future<void> stop() async {
-    final done = _onDone;
-    _onDone = null;
-    try {
-      await _tts.stop();
-    } catch (_) {}
-    done?.call();
-  }
-}
 
 // ---------- 语音输入：系统自带的语音识别，结果插到光标处，不自动发送 ----------
 class Dictation {

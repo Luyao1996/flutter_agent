@@ -65,7 +65,7 @@ class Turn {
   String get quote => str(user['quote']);
   Map<String, dynamic>? get skill => user['skill'] is Map ? asMap(user['skill']) : null;
 
-  /// 这一轮 AI 回复的原文（复制、朗读用），去掉问题选项代码块
+  /// 这一轮 AI 回复的原文（复制用），去掉问题选项代码块
   String get replyText => events.where((e) => e.e == 'text').map((e) => splitOptions(str(e.d['text'])).text).where((t) => t.isNotEmpty).join('\n\n');
 }
 

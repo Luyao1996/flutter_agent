@@ -11,7 +11,6 @@ import 'package:netbar_ops/netbar_ops.dart';
 import 'package:netbar_ops/src/api.dart';
 import 'package:netbar_ops/src/models.dart';
 import 'package:netbar_ops/src/panels/skills_panel.dart';
-import 'package:netbar_ops/src/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fake_backend.dart';
@@ -59,8 +58,7 @@ void main() {
     expect(r.options!.single.title, '程序崩溃');
   });
 
-  test('朗读前去掉 Markdown；技能文件解析', () {
-    expect(Reader.plainText('## 标题\n**加粗** `代码`\n```\nx\n```'), '标题\n加粗 代码\n（代码略）');
+  test('技能文件解析', () {
     final p = parseSkillFile('---\nname: 开机慢检查\ndescription: "开机慢时"\n---\n# 步骤\n1. 看启动项', 'SKILL.md');
     expect([p.name, p.description, p.content], ['开机慢检查', '开机慢时', '# 步骤\n1. 看启动项']);
   });

@@ -72,10 +72,11 @@ class VoiceCallController extends ChangeNotifier {
   WebSocketChannel? _ws;
   bool _ready = false;
   bool _disposed = false;
-  final _rec = AudioRecorder();
+  AudioRecorder? _recorder; // 进通话时才创建（测试环境里没有录音插件）
+  AudioRecorder get _rec => _recorder ??= AudioRecorder();
   StreamSubscription? _micSub;
   bool _playbackReady = false;
-  final _soloud = SoLoud.instance;
+  SoLoud get _soloud => SoLoud.instance; // 用到时才加载播放库（测试环境里没有这个库）
   AudioSource? _stream;
   bool _drop = false; // 被打断的回答还在路上的声音：不播
   bool _playing = false;
@@ -198,7 +199,7 @@ class VoiceCallController extends ChangeNotifier {
     _ready = false;
     _micSub?.cancel();
     _micSub = null;
-    _rec.stop().catchError((_) => null);
+    _recorder?.stop().catchError((_) => null);
     ws?.sink.close().catchError((_) {});
   }
 
@@ -585,7 +586,7 @@ class VoiceCallController extends ChangeNotifier {
     _disposed = true;
     _hush();
     _release();
-    _rec.dispose();
+    _recorder?.dispose();
     for (final b in bubbles) {
       b.timer?.cancel();
     }

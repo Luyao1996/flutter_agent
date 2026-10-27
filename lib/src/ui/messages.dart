@@ -1,7 +1,7 @@
 // 消息区：每一轮的用户消息、AI 回复、操作确认、问题选项、提示行，以及消息下方的操作
 // AI 回复不加气泡、占满宽度（像 ChatGPT / Claude），边生成边显示，末尾有闪烁的光标
 // 电脑上：选中文字右键可以“引用”，每条回复下方有一排操作按钮
-// 手机上：长按消息弹出操作菜单（复制、选择文字、引用、朗读、反馈、重新生成），符合手机聊天应用的习惯
+// 手机上：长按消息弹出操作菜单（复制、选择文字、引用、反馈、重新生成），符合手机聊天应用的习惯
 import 'dart:convert';
 
 import 'package:flutter/cupertino.dart';
@@ -710,7 +710,6 @@ Future<void> showReplyMenu(BuildContext context, Turn t, String text) async {
     const SheetAction('复制', 'copy', icon: Icons.copy_outlined),
     const SheetAction('选择文字', 'select', icon: Icons.text_fields),
     const SheetAction('引用这段回复', 'quote', icon: Icons.format_quote_outlined),
-    SheetAction(ctl.speakingTurn == t.id ? '停止朗读' : '朗读', 'speak', icon: Icons.volume_up_outlined),
     if (t.done) ...[
       SheetAction(t.feedback?['value'] == 'up' ? '取消“有帮助”' : '有帮助', 'up', icon: Icons.thumb_up_outlined),
       SheetAction(t.feedback?['value'] == 'down' ? '取消“没帮助”' : '没帮助', 'down', icon: Icons.thumb_down_outlined),
@@ -726,8 +725,6 @@ Future<void> showReplyMenu(BuildContext context, Turn t, String text) async {
       await pushPanel(context, title: '选择文字', builder: (ctx) => _SelectText(text));
     case 'quote':
       ctl.setQuote(text);
-    case 'speak':
-      await toggleSpeak(context, t, text);
     case 'up':
     case 'down':
       await giveFeedback(context, t, r);
@@ -770,25 +767,6 @@ class _SelectTextState extends State<_SelectText> {
   }
 }
 
-Future<void> toggleSpeak(BuildContext context, Turn t, String text) async {
-  final s = NetbarScope.read(context);
-  final ctl = s.controller;
-  if (ctl.speakingTurn == t.id) return s.reader.stop();
-  await s.reader.stop();
-  ctl.speakingTurn = t.id;
-  ctl.refresh();
-  try {
-    await s.reader.speak(text, () {
-      if (ctl.speakingTurn == t.id) {
-        ctl.speakingTurn = null;
-        ctl.refresh();
-      }
-    });
-  } catch (e) {
-    if (context.mounted) showToast(context, e.toString().replaceFirst('Exception: ', ''));
-  }
-}
-
 /// 点赞、点踩（点踩可以填原因）；再点一次取消
 Future<void> giveFeedback(BuildContext context, Turn t, String value) async {
   final ctl = NetbarScope.read(context).controller;
@@ -798,7 +776,7 @@ Future<void> giveFeedback(BuildContext context, Turn t, String value) async {
   if (reason != null) await ctl.sendFeedback(t, 'down', reason.trim());
 }
 
-/// 一轮结束后的操作：复制、朗读、点赞点踩、重新生成（放不下时自动换行）
+/// 一轮结束后的操作：复制、点赞点踩、重新生成（放不下时自动换行）
 class TurnActions extends StatelessWidget {
   const TurnActions(this.t, {super.key});
   final Turn t;
@@ -820,12 +798,6 @@ class TurnActions extends StatelessWidget {
               await copyText(text);
               if (context.mounted) showToast(context, '已复制');
             }),
-        AIconButton(
-            icon: ctl.speakingTurn == t.id ? Icons.stop_circle_outlined : Icons.volume_up_outlined,
-            tooltip: ctl.speakingTurn == t.id ? '停止朗读' : '朗读',
-            size: size,
-            color: ctl.speakingTurn == t.id ? on : null,
-            onPressed: () => toggleSpeak(context, t, text)),
         AIconButton(
             icon: fb == 'up' ? Icons.thumb_up : Icons.thumb_up_outlined, tooltip: '有帮助', size: size, color: fb == 'up' ? on : null, onPressed: () => giveFeedback(context, t, 'up')),
         AIconButton(
