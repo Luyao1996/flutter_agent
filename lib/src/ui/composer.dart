@@ -376,7 +376,7 @@ class _ComposerState extends State<Composer> {
         Padding(
           padding: const EdgeInsets.fromLTRB(6, 6, 6, 0),
           child: Row(children: [
-            if (ctl.config.barKey.isEmpty) ...[
+            if (ctl.barKey.isEmpty) ...[
               Icon(Icons.info_outline, size: 12, color: c.warnText),
               const SizedBox(width: 4),
               Flexible(

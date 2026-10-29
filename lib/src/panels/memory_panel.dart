@@ -19,10 +19,10 @@ class _MemoryPanelState extends State<MemoryPanel> {
   List<MemoryItem> _items = [];
   bool _loading = true;
   String? _error;
-  late String _scope = _ctl.config.barKey.isEmpty ? 'machine' : 'bar';
+  late String _scope = _ctl.barKey.isEmpty ? 'machine' : 'bar';
   String _q = '';
   ChatController get _ctl => NetbarScope.read(context).controller;
-  Map<String, dynamic> _body([Map<String, dynamic> extra = const {}]) => {'barId': _ctl.config.barKey, ...extra};
+  Map<String, dynamic> _body([Map<String, dynamic> extra = const {}]) => {'barId': _ctl.barKey, ...extra};
 
   @override
   void initState() {

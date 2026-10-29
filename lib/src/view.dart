@@ -218,7 +218,7 @@ List<SheetAction<String>> _moreActions(BuildContext context, {bool withHistory =
     if (withHistory) const SheetAction('历史对话', 'history', icon: Icons.history),
     const SheetAction('技能', 'skills', icon: Icons.auto_awesome_outlined),
     const SheetAction('知识库', 'kb', icon: Icons.menu_book_outlined),
-    SheetAction('记忆', 'memory', icon: Icons.sticky_note_2_outlined, subtitle: ctl.config.barKey.isEmpty ? '网吧记忆不可用（没有网吧名称）' : null),
+    SheetAction('记忆', 'memory', icon: Icons.sticky_note_2_outlined, subtitle: ctl.barKey.isEmpty ? '网吧记忆不可用（没有网吧名称）' : null),
     SheetAction('分享对话', 'share', icon: Icons.ios_share, enabled: has && !ctl.busy),
     SheetAction('总结经验到知识库', 'summarize', icon: Icons.summarize_outlined, enabled: has && !ctl.busy),
     SheetAction('修改对话名称', 'rename', icon: Icons.edit_outlined, enabled: has),
@@ -386,7 +386,7 @@ class _DesktopHeader extends StatelessWidget {
                   Padding(padding: const EdgeInsets.symmetric(horizontal: 6), child: Text('·', style: TextStyle(color: c.faint))),
                   Flexible(child: Text(cfg.machineName, maxLines: 1, overflow: TextOverflow.ellipsis, style: monoStyle(size: NT.fCaption, color: c.muted))),
                 ],
-                if (cfg.isClient) ...[const SizedBox(width: 6), const Tag('自动执行', icon: Icons.bolt)],
+                if (cfg.autoRun) ...[const SizedBox(width: 6), const Tag('自动执行', icon: Icons.bolt)],
                 if (cfg.isDebug) ...[const SizedBox(width: 6), const Tag('调试', color: Color(0xFFA855F7), icon: Icons.bug_report_outlined)],
               ]),
             ]),
@@ -458,7 +458,7 @@ class _NavTitle extends StatelessWidget {
           const SizedBox(width: 6),
           Flexible(child: Text(ctl.config.machineName, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: NT.fCaption, color: c.muted, fontWeight: FontWeight.w400))),
         ],
-        if (ctl.config.isClient) ...[const SizedBox(width: 4), Icon(Icons.bolt, size: 13, color: c.accentText)],
+        if (ctl.config.autoRun) ...[const SizedBox(width: 4), Icon(Icons.bolt, size: 13, color: c.accentText)],
       ]),
     ]);
   }

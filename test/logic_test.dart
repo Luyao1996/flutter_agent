@@ -88,6 +88,59 @@ void main() {
     expect(ctl.path.map((t) => t.text), ['游戏打不开', '还是不行']);
   });
 
+  test('连接：toolbox 照旧参数先 /api/start，之后带连接编号；连接过期自动重连再发', () async {
+    const tb = NetbarOpsConfig(baseUrl: 'http://fake', mcpUrl: 'https://rtc2.03kan.com/mcp/T03-abcd', token: 'mcp-token-1', isClient: true,
+        toolboxToken: 'admin-token-1', merchantId: '5001', sfuRoom: 'T03-abcd', sfuAddr: 'https://rtc2.03kan.com');
+    expect(tb.isNewEnv, isFalse);
+    expect(tb.autoRun, isTrue);
+    expect(tb.hasMulti, isTrue);
+    final be = FakeBackend();
+    final ctl = ChatController(tb, api: NetbarApi(tb, newClient: be.client));
+    await ctl.start();
+    expect(be.startBodies.single, {
+      'env': 'toolbox', 'mcp': 'https://rtc2.03kan.com/mcp/T03-abcd', 'token': 'mcp-token-1', 'isclient': '1',
+      'toolboxToken': 'admin-token-1', 'merchant_id': '5001', 'sfuroom': 'T03-abcd', 'sfuaddr': 'https://rtc2.03kan.com',
+    });
+    expect(ctl.api.connBody, {'mcpUrl': 'https://rtc2.03kan.com/mcp/T03-abcd', 'token': 'conn-1'});
+    ctl.input.text = '看看';
+    ctl.sendComposer();
+    await settle();
+    expect(be.chatBodies.single['token'], 'conn-1');
+    expect(be.chatBodies.single.containsKey('isClient'), isFalse);
+    // 后台重启过：发消息时先收到“连接已过期”，自动重新连上再发，用户看不到错误
+    be.expireNext = true;
+    ctl.input.text = '再看看';
+    ctl.sendComposer();
+    await settle();
+    expect(be.startBodies.length, 2);
+    expect(be.chatBodies.last['token'], 'conn-2');
+    expect(ctl.path.map((t) => t.text), ['看看', '再看看']);
+    // 普通接口也一样
+    be.expireNext = true;
+    await ctl.api.post('/api/sessions');
+    expect(be.startBodies.length, 3);
+  });
+
+  test('连接：cloud/yx 用新参数；没有网吧编号和名称时按解密出的网吧号区分网吧记忆', () async {
+    const cl = NetbarOpsConfig(baseUrl: 'http://fake', env: 'cloud', token: 'yx-token-1', root: 'gO0k3hkCVQM', branch: 'x002', role: 'client');
+    expect(cl.isValid, isTrue);
+    expect(cl.autoRun, isTrue);
+    expect(cl.netbar['netbarSeat'], 'x002');
+    expect(const NetbarOpsConfig(baseUrl: 'x', env: 'yx', token: 't', root: 'r').netbar['netbarSeat'], '服务端');
+    expect(const NetbarOpsConfig(baseUrl: 'x', env: 'cloud', token: 't').isValid, isFalse);
+    final be = FakeBackend();
+    final ctl = ChatController(cl, api: NetbarApi(cl, newClient: be.client));
+    await ctl.start();
+    expect(be.startBodies.single, {'env': 'cloud', 'token': 'yx-token-1', 'root': 'gO0k3hkCVQM', 'branch': 'x002', 'role': 'client'});
+    expect(ctl.barKey, 'cloud-2');
+    ctl.input.text = '看看';
+    ctl.sendComposer();
+    await settle();
+    expect(be.chatBodies.single['mcpUrl'], 'netbar://cloud/2/x002');
+    expect(be.chatBodies.single['barId'], 'cloud-2');
+    expect((await SharedPreferences.getInstance()).getString('netbar_ops.session.cloud/gO0k3hkCVQM/x002'), 'session-1');
+  });
+
   test('AI 处理中发送的消息排队，结束后自动处理；立即处理会停掉当前这一轮', () async {
     final be = FakeBackend()..askApproval = true;
     final ctl = ChatController(cfg, api: NetbarApi(cfg, newClient: be.client));

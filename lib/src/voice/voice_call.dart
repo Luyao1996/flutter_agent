@@ -104,7 +104,7 @@ class VoiceCallController extends ChangeNotifier {
   /// 返回是否成功开始（没有麦克风权限时返回 false，界面就不用进通话页）
   Future<bool> enter() async {
     if (on) return true;
-    if (chat.config.mcpUrl.isEmpty) return false;
+    if (!chat.api.isOpen) return false;
     final prefs = await SharedPreferences.getInstance();
     voiceId = prefs.getString('netbar_ops.talkVoice') ?? '';
     // 先要麦克风权限，没有就别开
@@ -147,8 +147,8 @@ class VoiceCallController extends ChangeNotifier {
           'type': 'start',
           'machine': chat.config.machineName,
           'barName': chat.config.barName,
-          'mcpUrl': chat.config.mcpUrl,
-          'token': chat.config.token,
+          'mcpUrl': chat.api.key,
+          'token': chat.api.conn,
           'busy': chat.busy,
           'history': _history(),
           if (voiceId.isNotEmpty) 'voice': voiceId,

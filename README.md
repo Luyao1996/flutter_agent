@@ -53,19 +53,33 @@ dependencies:
 import 'package:netbar_ops/netbar_ops.dart';
 
 Navigator.of(context).push(MaterialPageRoute(builder: (_) => NetbarOpsView(
+  // 云启动 / yx 网吧（env=cloud 或 yx）：
   config: NetbarOpsConfig(
     baseUrl: 'https://你的网吧经营管家地址',   // 网吧经营管家后台
-    mcpUrl: 'https://rtc2.03kan.com/mcp/xxxx', // 和网页版链接里的 mcp 一样
-    token: '令牌',                              // 和网页版链接里的 token 一样
-    netbarGroup: '富贵测试组', netbarName: '远程部', netbarSeat: 'WIN-20260917', netbarIp: '192.168.11.110',
-    // isClient: true,  // 自动执行模式（网页版 isclient=1）
-    // isDebug: true,   // 调试模式（网页版 isdebug=1），可以删除对话
-    // 操作本网吧其他电脑（多机）——和网页版链接里的 toolboxToken / merchant_id / sfuroom / sfuaddr 一一对应；
-    // 不传 toolboxToken 就没有多机功能：
-    // toolboxToken: 'admin 登录令牌', merchantId: '网吧编号', sfuRoom: '当前电脑房间号', sfuAddr: '中转服务器地址',
+    env: 'cloud',                               // cloud 或 yx
+    token: '银杏令牌',
+    root: '网吧编号密文',                       // SFU 的 /mcp_bar/encrypt 加密得到
+    branch: 'x002',                             // 座位号；空 = 网吧服务端
+    // role: 'client',  // 所有操作直接执行（默认 server：要确认）
+    netbarName: '远程部',
   ),
 )));
+
+// toolbox（远程运维后台，不传 env 也一样）：参数和以前完全一样
+NetbarOpsConfig(
+  baseUrl: 'https://你的网吧经营管家地址',
+  mcpUrl: 'https://rtc2.03kan.com/mcp/xxxx', // 和网页版链接里的 mcp 一样
+  token: '令牌',                              // 和网页版链接里的 token 一样（MCP 令牌）
+  netbarGroup: '富贵测试组', netbarName: '远程部', netbarSeat: 'WIN-20260917', netbarIp: '192.168.11.110',
+  // isClient: true,  // 自动执行模式（网页版 isclient=1）
+  // 操作本网吧其他电脑（多机）——和网页版链接里的 toolboxToken / merchant_id / sfuroom / sfuaddr 一一对应；
+  // 不传 toolboxToken 就没有多机功能：
+  // toolboxToken: 'admin 登录令牌', merchantId: '网吧编号', sfuRoom: '当前电脑房间号', sfuAddr: '中转服务器地址',
+)
 ```
+
+两种写法都可以加 `isDebug: true`（调试模式，网页版 isdebug=1，可以删除对话）。
+组件打开时会先请后台验证令牌、连上这台电脑（yx/cloud 的 AI 助手没在运行时会先启动，可能要等几十秒），后台重启过也会自动重新连接。
 
 - 界面风格默认按平台自动选择，也可以用 `uiStyle: NetbarUiStyle.cupertino` 等强制指定。
 - 颜色跟随你的应用主题（亮色/暗色）。
@@ -73,11 +87,22 @@ Navigator.of(context).push(MaterialPageRoute(builder: (_) => NetbarOpsView(
 
 ## 连接参数从哪里来
 
-`NetbarOpsConfig` 有三个必填项：
+`baseUrl` 是网吧经营管家后台地址，固定的：`https://e2e7eb00512d98de5d216730825b1499.app.wbtun.com`。其余按环境分两套：
+
+**env=cloud / yx**（必填 `token`、`root`）：
+
+| 参数 | 是什么 |
+|---|---|
+| `env` | `cloud`（云启动网吧）或 `yx` |
+| `token` | 银杏令牌 |
+| `root` | 网吧编号密文（SFU `/mcp_bar/encrypt` 加密得到） |
+| `branch` | 座位号；空 = 网吧服务端 |
+| `role` | `client`：所有操作直接执行；不填或 `server`：要确认 |
+
+**env=toolbox 或不传 env**（必填 `mcpUrl`、`token`，和以前一样）：
 
 | 参数 | 是什么 | 从哪里来 |
 |---|---|---|
-| `baseUrl` | 网吧经营管家后台地址 | 固定的：`https://e2e7eb00512d98de5d216730825b1499.app.wbtun.com` |
 | `mcpUrl` | 这台机器的远程运维地址，形如 `https://rtc2.03kan.com/mcp/机器编号` | 由 03kan 远程运维系统生成 |
 | `token` | 连接这台机器用的令牌 | 由 03kan 远程运维系统生成 |
 

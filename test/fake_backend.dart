@@ -40,11 +40,26 @@ class FakeBackend {
     {'id': 'm1', 'scope': 'machine', 'content': '这台机器键盘 F 键坏了', 'source': 'ai', 'updatedAt': '2026-10-23T08:00:00Z'},
   ];
 
+  /// 收到的 /api/start 请求；expireNext：下一个请求回“连接已过期”
+  final startBodies = <Map<String, dynamic>>[];
+  bool expireNext = false;
+
   http.Client client() => MockClient.streaming((req, body) async {
         final path = req.url.path;
         calls.add(path);
         final text = await body.bytesToString();
         final b = text.isEmpty || path == '/api/upload' ? <String, dynamic>{} : Map<String, dynamic>.from(jsonDecode(text) as Map);
+        if (path == '/api/start') {
+          startBodies.add(b);
+          final env = '${b['env']}';
+          final key = env == 'toolbox' ? '${b['mcp']}' : 'netbar://$env/2/${b['branch']}';
+          return _json({'token': 'conn-${startBodies.length}', 'key': key, 'env': env, if (env != 'toolbox') 'barId': '2'});
+        }
+        // 模拟后台重启：下一个请求回“连接已过期”
+        if (expireNext && path != '/api/harnesses') {
+          expireNext = false;
+          return _json({'error': '连接已过期，请刷新页面重新连接。'}, 400);
+        }
         if (path == '/api/chat') return _chat(b);
         if (path == '/api/upload') {
           return _json({

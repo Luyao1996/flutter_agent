@@ -99,6 +99,9 @@ class ChatController extends ChangeNotifier {
 
   final NetbarOpsConfig config;
   final NetbarApi api;
+
+  /// “这家网吧”的标识（区分网吧记忆）：配置里的网吧编号或名称；都没有时 yx/cloud 用连上后解密出的网吧号
+  String get barKey => config.barKey.isNotEmpty ? config.barKey : api.startedBarKey;
   final ImageShrinker? shrinkImage;
 
   /// 语音通话（用到时才建；没开通话时这些钩子都是空操作）
@@ -152,7 +155,7 @@ class ChatController extends ChangeNotifier {
   String? taskId;
   String? liveTurn;
 
-  /// 本网吧里当前已连接、可一起操作的其他电脑（多机 toolbox，没配 toolboxToken 时一直为空）
+  /// 本网吧里当前已连接、可一起操作的其他电脑（toolbox 环境没配 toolboxToken 时一直为空）
   List<OtherMachine> otherMachines = [];
   bool thinking = false;
   String thinkingText = 'AI 正在处理…';
@@ -217,10 +220,25 @@ class ChatController extends ChangeNotifier {
   /// 打开组件：有上次的对话就恢复（还在执行的任务会重新连上），没有就让用户选怎么开始
   Future<void> start() async {
     if (!config.isValid) {
-      notes.add(LocalNote('error', '缺少远程机器的连接信息，请传入完整的 MCP 地址和令牌。'));
+      notes.add(LocalNote('error', config.isNewEnv ? '缺少连接信息，请传入完整的 token 和 root。' : '缺少远程机器的连接信息，请传入完整的 MCP 地址和令牌。'));
       notifyListeners();
       return;
     }
+    // 先连上这台电脑（后台验证令牌；yx/cloud 的 AI 助手没在运行时要先启动，可能要等几十秒）
+    final who = config.isNewEnv ? (config.branch.trim().isEmpty ? '网吧服务端' : ' ${config.branch.trim()} ') : '这台电脑';
+    final tip = LocalNote('sys', config.isNewEnv ? '正在连接$who，AI 助手没在运行的话要先启动，可能要等几十秒…' : '正在连接$who…');
+    notes.add(tip);
+    notifyListeners();
+    try {
+      await api.open();
+    } on ApiError catch (e) {
+      notes.remove(tip);
+      notes.add(LocalNote('error', '${e.message} 可以关掉重新打开再试。'));
+      notifyListeners();
+      return;
+    }
+    notes.remove(tip);
+    notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     harnessId = prefs.getString('netbar_ops.harness') ?? '';
     loadHarnesses();
@@ -231,7 +249,7 @@ class ChatController extends ChangeNotifier {
     _showStart();
   }
 
-  String _key(String k) => 'netbar_ops.$k.${config.mcpUrl.trim()}';
+  String _key(String k) => 'netbar_ops.$k.${config.storeKey}';
   Future<void> _remember(String k, String? v) async {
     final prefs = await SharedPreferences.getInstance();
     if (v == null || v.isEmpty) {
@@ -371,11 +389,9 @@ class ChatController extends ChangeNotifier {
         if (opts.skillId != null) 'skillId': opts.skillId,
         'machine': config.machineName,
         'netbar': config.netbar,
-        'barId': config.barKey,
+        'barId': barKey,
         'sessionId': sessionId,
-        'isClient': config.isClient,
         if (harnessId.isNotEmpty) 'harness': harnessId,
-        if (config.toolbox != null) 'toolbox': config.toolbox,
         'origin': config.baseUrl, // 后台用它生成公网下载链接（share_remote_file / download_url）
       };
       await for (final (e, d) in api.stream('/api/chat', body, cancel: _streamCancel!.future)) {
@@ -625,7 +641,7 @@ class ChatController extends ChangeNotifier {
   // ---------- 操作本网吧的其他电脑（多机 toolbox） ----------
   /// 刷新当前已连接的其他电脑列表（没配 toolbox 或没有会话时清空）
   Future<void> loadOtherMachines() async {
-    if (config.toolbox == null || sessionId == null) {
+    if (!config.hasMulti || sessionId == null) {
       if (otherMachines.isNotEmpty) {
         otherMachines = [];
         notifyListeners();
@@ -786,7 +802,7 @@ class ChatController extends ChangeNotifier {
   // ---------- 记忆撤销 ----------
   Future<void> undoMemory(String memoryId, String? turn) async {
     try {
-      await api.post('/api/memory/delete', {'id': memoryId, 'barId': config.barKey, 'sessionId': sessionId, 'turn': turn});
+      await api.post('/api/memory/delete', {'id': memoryId, 'barId': barKey, 'sessionId': sessionId, 'turn': turn});
     } on ApiError catch (e) {
       return toast(e.message);
     }
