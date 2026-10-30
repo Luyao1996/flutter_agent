@@ -1,5 +1,6 @@
 // 组件的连接配置：对应网页版链接里的参数
-// env=yx / cloud：token（银杏令牌）、root（网吧编号密文）、branch（座位号，空 = 网吧服务端）、role（client / server）
+// env=yx / cloud：token（银杏令牌）、root（网吧编号密文）、branch（座位号，空 = 网吧服务端）、
+//   role（这台电脑的角色：client 客户机——所有操作不用确认；console 控制台、server 服务端——要确认；不传按有没有座位号推断）
 // env=toolbox 或不传 env：以前的参数——mcp、token（MCP 令牌）、isclient，多机另带 toolboxToken、merchant_id、sfuroom、sfuaddr
 // 另有网吧分组/名称/机位/IP、isdebug。打开时由后台 /api/start 验证、连上（必要时启动）电脑，换回一个连接编号（见 api.dart）
 import 'package:flutter/foundation.dart';
@@ -43,7 +44,8 @@ class NetbarOpsConfig {
   final String mcpUrl;
   final String token;
 
-  /// yx/cloud：网吧编号密文（root）、座位号（branch，空 = 网吧服务端）、client（所有操作直接执行）或 server（默认）
+  /// yx/cloud：网吧编号密文（root）、座位号（branch，空 = 网吧服务端）、这台电脑的角色（role）：
+  /// client 客户机（所有操作直接执行）、console 控制台、server 服务端（要确认）；不传按有没有座位号推断，要确认
   final String root;
   final String branch;
   final String role;
@@ -89,7 +91,7 @@ class NetbarOpsConfig {
 
   /// 打开时交给后台 /api/start 的连接参数（和网页版链接参数同名）
   Map<String, dynamic> get startBody => isNewEnv
-      ? {'env': env.trim(), 'token': token.trim(), 'root': root.trim(), 'branch': branch.trim(), 'role': role.trim().isEmpty ? 'server' : role.trim()}
+      ? {'env': env.trim(), 'token': token.trim(), 'root': root.trim(), 'branch': branch.trim(), if (role.trim().isNotEmpty) 'role': role.trim()}
       : {
           'env': 'toolbox',
           'mcp': mcpUrl.trim(),
@@ -110,7 +112,7 @@ class NetbarOpsConfig {
   Map<String, String> get netbar {
     var nb = {'netbarGroup': netbarGroup.trim(), 'netbarName': netbarName.trim(), 'netbarSeat': netbarSeat.trim(), 'netbarIp': netbarIp.trim()};
     if (nb.values.every((v) => v.isEmpty)) nb = splitName(name);
-    if (nb['netbarSeat']!.isEmpty && isNewEnv) nb['netbarSeat'] = branch.trim().isEmpty ? '服务端' : branch.trim();
+    if (nb['netbarSeat']!.isEmpty && isNewEnv) nb['netbarSeat'] = branch.trim().isEmpty || role.trim() == 'server' ? '服务端' : branch.trim();
     if (nb['netbarSeat']!.isEmpty && mcpUrl.isNotEmpty) {
       final parts = mcpUrl.replaceAll(RegExp(r'/+$'), '').split('/');
       nb['netbarSeat'] = Uri.decodeComponent(parts.last);

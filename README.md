@@ -60,7 +60,7 @@ Navigator.of(context).push(MaterialPageRoute(builder: (_) => NetbarOpsView(
     token: '银杏令牌',
     root: '网吧编号密文',                       // SFU 的 /mcp_bar/encrypt 加密得到
     branch: 'x002',                             // 座位号；空 = 网吧服务端
-    // role: 'client',  // 所有操作直接执行（默认 server：要确认）
+    // role: 'client',  // 这台电脑的角色：client 客户机（所有操作直接执行）、console 控制台、server 服务端（要确认）
     netbarName: '远程部',
   ),
 )));
@@ -97,7 +97,7 @@ NetbarOpsConfig(
 | `token` | 银杏令牌 |
 | `root` | 网吧编号密文（SFU `/mcp_bar/encrypt` 加密得到） |
 | `branch` | 座位号；空 = 网吧服务端 |
-| `role` | `client`：所有操作直接执行；不填或 `server`：要确认 |
+| `role` | 这台电脑的角色：`client` 客户机（所有操作直接执行）、`console` 控制台、`server` 服务端（这两种要确认）；不填按有没有座位号推断，要确认 |
 
 **env=toolbox 或不传 env**（必填 `mcpUrl`、`token`，和以前一样）：
 

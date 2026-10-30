@@ -225,7 +225,7 @@ class ChatController extends ChangeNotifier {
       return;
     }
     // 先连上这台电脑（后台验证令牌；yx/cloud 的 AI 助手没在运行时要先启动，可能要等几十秒）
-    final who = config.isNewEnv ? (config.branch.trim().isEmpty ? '网吧服务端' : ' ${config.branch.trim()} ') : '这台电脑';
+    final who = config.isNewEnv ? (config.branch.trim().isEmpty || config.role.trim() == 'server' ? '网吧服务端' : ' ${config.branch.trim()} ') : '这台电脑';
     final tip = LocalNote('sys', config.isNewEnv ? '正在连接$who，AI 助手没在运行的话要先启动，可能要等几十秒…' : '正在连接$who…');
     notes.add(tip);
     notifyListeners();

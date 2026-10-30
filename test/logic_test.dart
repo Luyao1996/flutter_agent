@@ -127,6 +127,11 @@ void main() {
     expect(cl.autoRun, isTrue);
     expect(cl.netbar['netbarSeat'], 'x002');
     expect(const NetbarOpsConfig(baseUrl: 'x', env: 'yx', token: 't', root: 'r').netbar['netbarSeat'], '服务端');
+    expect(const NetbarOpsConfig(baseUrl: 'x', env: 'yx', token: 't', root: 'r', branch: '099', role: 'server').netbar['netbarSeat'], '服务端');
+    const console = NetbarOpsConfig(baseUrl: 'x', env: 'yx', token: 't', root: 'r', branch: '099', role: 'console');
+    expect(console.autoRun, isFalse);
+    expect(console.startBody['role'], 'console');
+    expect(const NetbarOpsConfig(baseUrl: 'x', env: 'yx', token: 't', root: 'r', branch: '038').startBody.containsKey('role'), isFalse);
     expect(const NetbarOpsConfig(baseUrl: 'x', env: 'cloud', token: 't').isValid, isFalse);
     final be = FakeBackend();
     final ctl = ChatController(cl, api: NetbarApi(cl, newClient: be.client));
