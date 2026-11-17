@@ -6,11 +6,22 @@ import '../controller.dart';
 import '../models.dart';
 import '../ui/adaptive.dart';
 import 'common.dart';
+import 'listview.dart';
 
-Future<void> openMemoryPanel(BuildContext context) => pushPanel(context, title: '记忆', width: 760, height: 640, builder: (_) => const MemoryPanel());
+Future<void> openMemoryPanel(BuildContext context) {
+  final h = PanelRefresh();
+  return pushPanel(context, title: '记忆', width: 760, height: 640, actions: refreshActions(h), builder: (_) => MemoryPanel(refresh: h));
+}
+
+/// 列表接口里新加的字段：属于哪一套、能不能改（管理员记的登录用户只能看）
+extension MemoryItemMore on MemoryItem {
+  String get env => str(raw['env']);
+  bool get canEdit => raw['canEdit'] != false;
+}
 
 class MemoryPanel extends StatefulWidget {
-  const MemoryPanel({super.key});
+  const MemoryPanel({super.key, this.refresh});
+  final PanelRefresh? refresh;
   @override
   State<MemoryPanel> createState() => _MemoryPanelState();
 }
@@ -21,18 +32,22 @@ class _MemoryPanelState extends State<MemoryPanel> {
   String? _error;
   late String _scope = _ctl.barKey.isEmpty ? 'machine' : 'bar';
   String _q = '';
+  bool _allEnvs = false;
   ChatController get _ctl => NetbarScope.read(context).controller;
   Map<String, dynamic> _body([Map<String, dynamic> extra = const {}]) => {'barId': _ctl.barKey, ...extra};
 
   @override
   void initState() {
     super.initState();
+    widget.refresh?.reload = _reload;
     _reload();
   }
 
   Future<void> _reload() async {
     try {
-      _items = asList((await _ctl.api.post('/api/memory/list', _body()))['items']).map((x) => MemoryItem(asMap(x))).toList();
+      final r = await _ctl.api.post('/api/memory/list', _body());
+      _items = asList(r['items']).map((x) => MemoryItem(asMap(x))).toList();
+      _allEnvs = r['allEnvs'] == true;
       _error = null;
     } on ApiError catch (e) {
       _error = e.message;
@@ -135,9 +150,12 @@ class _MemoryPanelState extends State<MemoryPanel> {
                             RowGroup(children: [
                               for (final x in list)
                                 ListRow(
-                                  title: x.content, meta: '${x.byAi ? 'AI 自动记下' : '手动添加'} · ${fmtTime(x.updatedAt)}',
+                                  title: x.content,
+                                  leading: envTag(x.env, _allEnvs),
+                                  meta: '${x.byAi ? 'AI 自动记下' : '手动添加'} · ${fmtTime(x.updatedAt)}${x.canEdit ? '' : ' · 管理员记的，只能看'}',
                                   // 手机上点一下弹出“修改 / 删除”；电脑上直接给两个按钮
                                   onTap: () async {
+                                    if (!x.canEdit) return showAlert(context, x.content, title: '管理员记的，只能看');
                                     if (s.isDesktop) return _edit(x);
                                     final r = await actionSheet<String>(context, message: x.content, actions: const [
                                       SheetAction('修改', 'edit', icon: Icons.edit_outlined),
@@ -146,7 +164,7 @@ class _MemoryPanelState extends State<MemoryPanel> {
                                     if (r == 'edit') _edit(x);
                                     if (r == 'delete') _delete(x);
                                   },
-                                  trailing: s.isDesktop
+                                  trailing: s.isDesktop && x.canEdit
                                       ? Row(mainAxisSize: MainAxisSize.min, children: [
                                           AIconButton(icon: Icons.edit_outlined, tooltip: '修改', onPressed: () => _edit(x)),
                                           AIconButton(icon: Icons.delete_outline, tooltip: '删除', onPressed: () => _delete(x)),
