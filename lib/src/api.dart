@@ -62,6 +62,26 @@ class _UploadRequest extends http.BaseRequest {
   }
 }
 
+/// 原样上传的请求：内容边读边发（大文件不用整个读进内存），进度是真实的发送进度
+class _RawRequest extends http.BaseRequest {
+  _RawRequest(Uri url, this.body, int length, this.onProgress) : super('POST', url) {
+    contentLength = length;
+  }
+  final Stream<List<int>> body;
+  final void Function(int sent, int total)? onProgress;
+
+  @override
+  http.ByteStream finalize() {
+    super.finalize();
+    var sent = 0;
+    return http.ByteStream(body.map((c) {
+      sent += c.length;
+      onProgress?.call(sent, contentLength ?? sent);
+      return c;
+    }));
+  }
+}
+
 class NetbarApi {
   /// newClient：测试时可以换成假的后台
   NetbarApi(this.config, {http.Client Function()? newClient}) : _newClient = newClient ?? http.Client.new {
@@ -282,6 +302,43 @@ class NetbarApi {
         if (res.statusCode != 200) throw ApiError(_errorOf(res.bodyBytes, res.statusCode), res.statusCode);
         return res.bodyBytes;
       });
+
+  // ---------- 管理面板用：原样上传、下载（资料库、知识库 zip、工具库） ----------
+  /// 把一段内容原样 POST 上去，返回 JSON。body 每次给一个新的数据流、headers 每次重新取（连接过期重连后要重新发，连接编号也变了）；
+  /// onProgress 报告真实的发送字节数
+  Future<Map<String, dynamic>> postRaw(String path,
+          {required Stream<List<int>> Function() body,
+          required int length,
+          required Map<String, String> Function() headers,
+          void Function(int sent, int total)? onProgress}) =>
+      _retry(() async {
+        final req = _RawRequest(_uri(path), body(), length, onProgress)..headers.addAll(headers());
+        final client = _newClient();
+        try {
+          final timeout = Duration(seconds: max(60, length ~/ (100 * 1024)));
+          return _json(await _guard(client.send(req).then(http.Response.fromStream), timeout));
+        } finally {
+          client.close();
+        }
+      });
+
+  /// 普通接口，但返回的是文件内容（资料库下载）
+  Future<Uint8List> postBytes(String path, [Map<String, dynamic> body = const {}]) => _retry(() async {
+        final res = await _guard(
+            _client.post(_uri(path), headers: {'Content-Type': 'application/json'}, body: jsonEncode({...connBody, ...body})), downloadTimeout);
+        if (res.statusCode != 200) throw ApiError(_errorOf(res.bodyBytes, res.statusCode), res.statusCode);
+        return res.bodyBytes;
+      });
+
+  /// GET 文件内容（工具库的一次性下载链接，path 是后台给的“/api/tools/dl/…”）；出错时后台回的是一行文字
+  Future<Uint8List> getBytes(String path, {Duration timeout = const Duration(minutes: 30)}) async {
+    final res = await _guard(_client.get(_uri(path)), timeout);
+    if (res.statusCode != 200) {
+      final t = utf8.decode(res.bodyBytes, allowMalformed: true).trim();
+      throw ApiError(t.isNotEmpty && t.length < 200 && !t.startsWith('{') ? t : _errorOf(res.bodyBytes, res.statusCode), res.statusCode);
+    }
+    return res.bodyBytes;
+  }
 
   /// 分享链接的网址
   String shareUrl(String id) => '${config.baseUrl.replaceAll(RegExp(r'/+$'), '')}/share/$id';

@@ -75,7 +75,13 @@ class _HistoryListState extends State<HistoryList> {
       onRefresh: _reload,
       child: ListView(padding: EdgeInsets.symmetric(horizontal: s.isDesktop ? 10 : 0, vertical: 6), children: [
         if (s.isDesktop)
-          Padding(padding: const EdgeInsets.fromLTRB(4, 0, 4, 8), child: Text('这台机器以前的对话。点开可以查看完整过程，并在原来的基础上接着处理。', style: TextStyle(fontSize: 11.5, color: c.muted))),
+          Padding(
+              padding: const EdgeInsets.fromLTRB(4, 0, 0, 8),
+              child: Row(children: [
+                Expanded(child: Text('这台机器以前的对话。点开可以查看完整过程，并在原来的基础上接着处理。', style: TextStyle(fontSize: 11.5, color: c.muted))),
+                // 电脑上没有下拉刷新：给一个刷新按钮
+                AIconButton(icon: Icons.refresh, tooltip: '刷新：重新载入历史对话', size: 16, onPressed: _reload),
+              ])),
         RowGroup(children: [
           for (final x in _list!)
             ListRow(

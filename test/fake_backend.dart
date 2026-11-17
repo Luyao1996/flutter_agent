@@ -127,6 +127,48 @@ class FakeBackend {
     {'id': 'm1', 'scope': 'machine', 'content': '这台机器键盘 F 键坏了', 'source': 'ai', 'updatedAt': '2026-10-23T08:00:00Z'},
   ];
 
+  /// 用密码打开：列表里每条标出属于哪一套
+  bool allEnvs = false;
+
+  /// 工具库：hasToken = 链接里有登录令牌（没有时要先输管理密码 pw）
+  bool toolToken = true;
+  final tools = <Map<String, dynamic>>[
+    {
+      'name': 'disk-check',
+      'type': 'zip',
+      'title': '硬盘检查',
+      'desc': '检查硬盘健康状态和坏道',
+      'category': '硬件/硬盘',
+      'entry': 'bin/check.exe',
+      'args': ['/silent', '--drive', '{drive}'],
+      'params': {
+        'drive': {'desc': '盘符', 'required': true}
+      },
+      'size': 2048000,
+      'owner': 'toolbox',
+      'canEdit': true,
+      'by': '小王',
+      'updatedAt': '2026-11-01T08:00:00Z'
+    },
+    {'name': 'bar-info', 'type': 'http_get', 'desc': '查网吧信息', 'url': 'https://api.example.com/bar', 'owner': 'admin', 'canEdit': false},
+  ];
+
+  /// 上传接口最后收到的请求头和内容
+  Map<String, String> lastHeaders = {};
+  List<int> lastRaw = [];
+
+  /// 资料库
+  final libRoots = [
+    {'env': 'toolbox', 'name': '我们的资料', 'canEdit': true},
+    {'env': 'admin', 'name': '管理员资料', 'canEdit': false},
+  ];
+  final libNodes = <Map<String, dynamic>>[
+    {'id': 'f1', 'env': 'toolbox', 'parentId': '', 'kind': 'folder', 'name': '云启动', 'description': '云启动的说明和日志'},
+    {'id': 'f2', 'env': 'toolbox', 'parentId': 'f1', 'kind': 'folder', 'name': '日志', 'description': ''},
+    {'id': 'n1', 'env': 'toolbox', 'parentId': 'f1', 'kind': 'file', 'name': '说明.md', 'size': 2048, 'textLen': 30, 'updatedAt': '2026-11-02T08:00:00Z'},
+    {'id': 'n2', 'env': 'admin', 'parentId': '', 'kind': 'file', 'name': '管理员手册.txt', 'size': 100, 'canEdit': false, 'updatedAt': '2026-11-02T08:00:00Z'},
+  ];
+
   /// 收到的 /api/start 请求；expireNext：下一个请求回“连接已过期”
   final startBodies = <Map<String, dynamic>>[];
   bool expireNext = false;
@@ -152,7 +194,12 @@ class FakeBackend {
         final path = req.url.path;
         calls.add(path);
         final text = await body.bytesToString();
-        final b = text.isEmpty || path == '/api/upload' ? <String, dynamic>{} : Map<String, dynamic>.from(jsonDecode(text) as Map);
+        final raw = path == '/api/upload' || path == '/api/tools/upload' || path == '/api/lib/upload' || path == '/api/kb/upload-zip';
+        if (raw) {
+          lastHeaders = req.headers;
+          lastRaw = utf8.encode(text);
+        }
+        final b = text.isEmpty || raw ? <String, dynamic>{} : Map<String, dynamic>.from(jsonDecode(text) as Map);
         if (path == '/api/start') {
           startBodies.add(b);
           final env = '${b['env']}';
@@ -177,20 +224,46 @@ class FakeBackend {
         }
         if (path.startsWith('/api/room/')) return _room(path, b);
         if (path == '/api/sessions/get' && sessionData != null) return _json(sessionData!);
+        if (path == '/api/tools/login' && b['password'] != 'pw') return _json({'error': 'rtc2.03kan.com 拒绝了：管理密码不对'}, 403);
+        if (path == '/api/tools/delete') tools.removeWhere((x) => x['name'] == b['name']);
+        if (path.startsWith('/api/tools/dl/')) return http.StreamedResponse(Stream.value(utf8.encode('PK-zip')), 200);
+        if (path == '/api/lib/download') return http.StreamedResponse(Stream.value(utf8.encode('文件内容')), 200);
+        if (path == '/api/tools/upload') {
+          final m = RegExp(r'"name":"([a-z0-9_-]+)"').firstMatch(text);
+          return _json({'ok': true, 'name': m?.group(1), 'replaced': tools.any((x) => x['name'] == m?.group(1))});
+        }
         if (path == '/api/upload') {
           return _json({
             'file': {'group': 'g', 'id': 'u${calls.length}', 'name': Uri.decodeComponent(req.headers['X-File-Name'] ?? ''), 'size': text.length, 'kind': 'text'}
           });
         }
         return _json(switch (path) {
-          '/api/kb/list' => {'items': kb},
+          '/api/kb/list' => {'items': kb, 'allEnvs': allEnvs},
           '/api/kb/suggest' => {
               'items': [
                 for (final x in kb) {'id': x['id'], 'type': x['type'], 'title': x['title'], 'snippet': '摘要'},
                 for (final s in skills) {'id': s['id'], 'type': 'skill', 'title': s['name'], 'snippet': s['description']},
               ]
             },
-          '/api/skills/list' => {'items': skills},
+          '/api/skills/list' => {'items': skills, 'allEnvs': allEnvs},
+          '/api/tools/sfus' => {
+              'items': [
+                {'id': 0, 'name': 'rtc2.03kan.com'},
+                {'id': 1, 'name': 'rtc.03kan.com'}
+              ],
+              'hasToken': toolToken
+            },
+          '/api/tools/list' => {'tools': tools, 'full': true, 'me': 'toolbox'},
+          '/api/tools/login' => {'key': '0123456789abcdef0123456789abcdef'},
+          '/api/tools/link' => {'url': '/api/tools/dl/abc/${b['name']}.zip'},
+          '/api/lib/tree' => {'roots': libRoots, 'nodes': libNodes},
+          '/api/lib/file' => {'node': libNodes.firstWhere((n) => n['id'] == b['id']), 'text': '# 云启动说明\n服务端日志在 D:\\logs，错误码 E1024 表示磁盘满', 'total': 30},
+          '/api/lib/search' => {
+              'hits': [
+                {'id': 'n1', 'path': '我们的资料/云启动/说明.md', 'snippet': '错误码 E1024 表示磁盘满', 'start': 10, 'nameOnly': false}
+              ]
+            },
+          '/api/lib/upload' => {'added': 1, 'updated': 0, 'errors': [], 'lastId': 'n9'},
           '/api/memory/list' => {'items': memories},
           '/api/sessions' => {
               'sessions': [

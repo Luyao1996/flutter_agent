@@ -515,12 +515,10 @@ class _UserMessage extends StatelessWidget {
                     icon: refIcon(r.type),
                     label: r.title,
                     color: r.type == 'tool' ? toolBubbleColor : null,
-                    // @ 的工具点开看工具；资料库的文件由资料库面板处理，这里不跳
+                    // @ 的工具点开工具库；资料库的文件在知识库的“资料库”里打开
                     onTap: r.type == 'tool'
                         ? () => openTool(context, toolNameOfRef(r.id), title: r.title)
-                        : r.type == 'library'
-                            ? null
-                            : () => openKbPanel(context, type: r.type, selectId: r.id)),
+                        : () => openKbPanel(context, type: r.type, selectId: r.id)),
             ]),
           ),
         if (t.attachments.isNotEmpty)

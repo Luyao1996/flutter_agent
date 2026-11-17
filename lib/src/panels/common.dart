@@ -34,7 +34,10 @@ class ListRow extends StatelessWidget {
       this.dimmed = false,
       required this.onTap,
       this.onLongPress,
-      this.trailing});
+      this.trailing,
+      this.leading,
+      this.query = '',
+      this.snippet});
   final String title;
   final String? subtitle, meta;
   final List<Widget> chips;
@@ -43,14 +46,40 @@ class ListRow extends StatelessWidget {
   final VoidCallback? onLongPress;
   final Widget? trailing;
 
+  /// 标题前面的小标签（属于哪一套）
+  final Widget? leading;
+
+  /// 搜索词：标题、说明里命中的字标出来；snippet 是内容里命中的那一句（前文、命中、后文）
+  final String query;
+  final (String, String, String)? snippet;
+
   @override
   Widget build(BuildContext context) {
     final s = NetbarScope.of(context);
     final c = NetbarColors(context);
+    final mark = NT.warn.withValues(alpha: c.dark ? .45 : .35);
+    List<InlineSpan> hl(String t) {
+      final i = query.isEmpty ? -1 : t.toLowerCase().indexOf(query.toLowerCase());
+      if (i < 0) return [TextSpan(text: t)];
+      return [TextSpan(text: t.substring(0, i)), TextSpan(text: t.substring(i, i + query.length), style: TextStyle(backgroundColor: mark)), TextSpan(text: t.substring(i + query.length))];
+    }
+
+    final titleText = Text.rich(TextSpan(children: hl(title)),
+        maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: s.isMobile ? NT.fBodyMobile : NT.fBody, fontWeight: FontWeight.w500, color: dimmed ? c.muted : c.text));
     final body = Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-      Text(title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: s.isMobile ? NT.fBodyMobile : NT.fBody, fontWeight: FontWeight.w500, color: dimmed ? c.muted : c.text)),
+      leading == null ? titleText : Row(children: [leading!, const SizedBox(width: 5), Flexible(child: titleText)]),
       if (subtitle != null && subtitle!.isNotEmpty)
-        Text(subtitle!, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: s.isMobile ? NT.fSmall : NT.fCaption, color: c.muted)),
+        Text.rich(TextSpan(children: hl(subtitle!)), maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: s.isMobile ? NT.fSmall : NT.fCaption, color: c.muted)),
+      if (snippet != null)
+        Text.rich(
+            TextSpan(children: [
+              TextSpan(text: snippet!.$1),
+              TextSpan(text: snippet!.$2, style: TextStyle(backgroundColor: mark, color: c.text)),
+              TextSpan(text: snippet!.$3),
+            ]),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: NT.fCaption, color: c.muted)),
       if (chips.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 3), child: Wrap(spacing: 4, runSpacing: 3, children: chips)),
       if (meta != null)
         Padding(padding: const EdgeInsets.only(top: 2), child: Text(meta!, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 11.5, color: c.faint))),

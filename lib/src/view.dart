@@ -15,6 +15,7 @@ import 'panels/kb_panel.dart';
 import 'panels/memory_panel.dart';
 import 'panels/share_panel.dart';
 import 'panels/skills_panel.dart';
+import 'panels/tools_panel.dart';
 import 'services.dart' as services;
 import 'ui/adaptive.dart';
 import 'ui/auto_switch.dart';
@@ -221,6 +222,7 @@ List<SheetAction<String>> _moreActions(BuildContext context, {bool withHistory =
     if (!withHistory)
       SheetAction(ctl.autoApprove ? '始终允许：已开启（点一下关掉）' : '始终允许：已关闭（点一下打开）', 'auto', icon: Icons.bolt, checked: ctl.autoApprove, subtitle: ctl.autoHint),
     const SheetAction('技能', 'skills', icon: Icons.auto_awesome_outlined),
+    const SheetAction('工具', 'tools', icon: Icons.handyman_outlined),
     const SheetAction('知识库', 'kb', icon: Icons.menu_book_outlined),
     SheetAction('记忆', 'memory', icon: Icons.sticky_note_2_outlined, subtitle: ctl.barKey.isEmpty ? '网吧记忆不可用（没有网吧名称）' : null),
     SheetAction('分享对话', 'share', icon: Icons.ios_share, enabled: has && !ctl.busy),
@@ -241,6 +243,8 @@ void _onMore(BuildContext context, String? r, {VoidCallback? openHistory}) {
       toggleAutoApprove(context);
     case 'skills':
       openSkillsPanel(context);
+    case 'tools':
+      openToolsPanel(context);
     case 'kb':
       openKbPanel(context);
     case 'memory':
@@ -365,6 +369,7 @@ class _DesktopHeader extends StatelessWidget {
       final mode = w >= 840 ? 2 : (w >= 560 ? 1 : 0);
       final actions = <(IconData, String, VoidCallback?)>[
         (Icons.auto_awesome_outlined, '技能', () => openSkillsPanel(context)),
+        (Icons.handyman_outlined, '工具', () => openToolsPanel(context)),
         (Icons.menu_book_outlined, '知识库', () => openKbPanel(context)),
         (Icons.sticky_note_2_outlined, '记忆', () => openMemoryPanel(context)),
         (Icons.ios_share, '分享', has && !ctl.busy ? () => openSharePanel(context) : null),

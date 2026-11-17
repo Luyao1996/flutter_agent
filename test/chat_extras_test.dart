@@ -235,14 +235,7 @@ void main() {
       expect(m.calls['/api/uploads/link']?['id'], 'img1');
       expect(copied, 'http://fake/f/img1-link');
 
-      // 点消息里 @ 的工具：没接工具面板时弹详情框
-      await t.tap(find.text('清理临时文件'));
-      await flush(t, 6);
-      expect(find.text('工具：清理临时文件'), findsOneWidget);
-      await t.tap(find.text('知道了'));
-      await flush(t, 12);
-      expect(find.text('工具：清理临时文件'), findsNothing);
-      // 接了工具面板：交给它打开
+      // 宿主接管了点工具：交给它打开（不接时打开工具库，见 panels_test）
       String? opened;
       ctl.onOpenTool = (n) => opened = n;
       await t.tap(find.text('清理临时文件'));

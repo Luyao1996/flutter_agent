@@ -2,13 +2,13 @@
 // AI 从电脑上取回的文件（file_shared）、语音通话记录（voice）、@ 的类型（经验、背景知识、资料、技能、工具）
 import 'dart:typed_data';
 
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 import '../api.dart';
 import '../models.dart';
 import '../services.dart';
+import '../panels/tools_panel.dart';
 import 'adaptive.dart';
 import 'attachments.dart';
 import 'messages.dart' show SysLine;
@@ -33,60 +33,12 @@ const toolBubbleColor = Color(0x7314B8A6);
 String toolNameOfRef(String id) => id.startsWith('tool:') ? id.substring(5) : id;
 
 // ---------- 打开工具详情 ----------
-/// 点工具名：宿主（或工具面板）在 controller.onOpenTool 里接管；没接时弹一个简单的详情框兜底
+/// 点工具名：打开工具库并选中它；宿主可以在 controller.onOpenTool 里接管
 void openTool(BuildContext context, String name, {String title = '', String args = '', bool? ok, String machine = ''}) {
   final ctl = NetbarScope.read(context).controller;
   if (name.isEmpty) return;
   if (ctl.onOpenTool != null) return ctl.onOpenTool!(name);
-  final c = NetbarColors(context);
-  final rows = <(String, String)>[
-    ('名称', name),
-    if (title.isNotEmpty && title != name) ('标题', title),
-    if (machine.isNotEmpty) ('电脑', machine),
-    if (args.isNotEmpty) ('参数', args),
-    if (ok != null) ('结果', ok ? '运行成功' : '运行出错'),
-  ];
-  infoDialog(
-    context,
-    title: '工具：${title.isNotEmpty ? title : name}',
-    content: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
-      for (final r in rows)
-        Padding(
-          padding: const EdgeInsets.only(bottom: 6),
-          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            SizedBox(width: 44, child: Text(r.$1, style: TextStyle(fontSize: NT.fSmall, color: c.muted))),
-            Expanded(child: SelectableText(r.$2, style: monoStyle(size: NT.fSmall, color: r.$2 == '运行出错' ? c.warnText : c.text))),
-          ]),
-        ),
-      const SizedBox(height: 4),
-      Text('工具的完整设置（说明、参数、命令行）在工具库里查看和修改。', style: TextStyle(fontSize: NT.fCaption, color: c.muted)),
-    ]),
-  );
-}
-
-/// 只有一个“知道了”按钮的说明框
-Future<void> infoDialog(BuildContext context, {required String title, required Widget content}) {
-  final s = NetbarScope.read(context);
-  if (s.isCupertino) {
-    return showCupertinoDialog<void>(
-        context: context,
-        useRootNavigator: false,
-        builder: (ctx) => CupertinoAlertDialog(
-              title: Text(title),
-              content: Padding(padding: const EdgeInsets.only(top: 8), child: Material(type: MaterialType.transparency, child: s.copyWith(child: content))),
-              actions: [CupertinoDialogAction(isDefaultAction: true, onPressed: () => Navigator.pop(ctx), child: const Text('知道了'))],
-            ));
-  }
-  return showDialog<void>(
-      context: context,
-      useRootNavigator: false,
-      builder: (ctx) => s.copyWith(
-          child: AlertDialog(
-            title: Text(title, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
-            scrollable: true,
-            content: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 480), child: content),
-            actions: [AButton(label: '知道了', kind: BtnKind.primary, onPressed: () => Navigator.pop(ctx))],
-          )));
+  openToolsPanel(context, name: name);
 }
 
 // ---------- “使用了工具”一行 ----------

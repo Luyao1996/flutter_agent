@@ -120,7 +120,8 @@ void main() {
         await t.tap(find.text('知识库'));
       }
       await flush(t, 10);
-      final kbItem = find.descendant(of: find.byType(KbPanel), matching: find.text('桌面图标被隐藏的排查方法'));
+      // 宽屏时右边默认打开第一条，标题会出现两次（列表 + 详情）
+      final kbItem = find.descendant(of: find.byType(KbPanel), matching: find.text('桌面图标被隐藏的排查方法')).first;
       expect(kbItem, findsOneWidget);
       await expectLater(find.byType(MaterialApp), matchesGoldenFile('goldens/$name-5-kb.png'));
       await t.tap(kbItem);
