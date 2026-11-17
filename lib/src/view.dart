@@ -18,6 +18,7 @@ import 'panels/skills_panel.dart';
 import 'services.dart' as services;
 import 'ui/adaptive.dart';
 import 'ui/composer.dart';
+import 'ui/group_view.dart';
 import 'ui/messages.dart';
 
 /// 远程运维聊天组件。放在一个页面或一块区域里即可，它自带顶栏和输入区
@@ -405,6 +406,7 @@ class _DesktopHeader extends StatelessWidget {
               const SizedBox(height: 2),
               Row(children: [
                 _McpBadge(ctl),
+                RoomBadge(ctl),
                 if (cfg.machineName.isNotEmpty) ...[
                   Padding(padding: const EdgeInsets.symmetric(horizontal: 6), child: Text('·', style: TextStyle(color: c.faint))),
                   Flexible(child: Text(cfg.machineName, maxLines: 1, overflow: TextOverflow.ellipsis, style: monoStyle(size: NT.fCaption, color: c.muted))),
@@ -478,6 +480,7 @@ class _NavTitle extends StatelessWidget {
       Text(ctl.title.isEmpty ? '远程运维' : ctl.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: c.text)),
       Row(mainAxisSize: MainAxisSize.min, children: [
         _McpBadge(ctl, compact: true),
+        RoomBadge(ctl),
         if (ctl.config.machineName.isNotEmpty) ...[
           const SizedBox(width: 6),
           Flexible(child: Text(ctl.config.machineName, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: NT.fCaption, color: c.muted, fontWeight: FontWeight.w400))),

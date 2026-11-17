@@ -308,7 +308,7 @@ class _ComposerState extends State<Composer> {
         style: TextStyle(fontSize: NT.fBody, height: 1.5, color: c.text),
         cursorColor: NT.accent,
         decoration: InputDecoration(
-          hintText: ctl.placeholder,
+          hintText: ctl.inputHint,
           hintStyle: TextStyle(color: c.muted, fontSize: NT.fBody),
           hintMaxLines: 2,
           filled: false,
@@ -425,7 +425,7 @@ class _ComposerState extends State<Composer> {
             minLines: 1,
             maxLines: 6,
             enabled: ctl.config.isValid,
-            placeholder: _shortHint(ctl.placeholder),
+            placeholder: _shortHint(ctl.inputHint),
             placeholderStyle: TextStyle(fontSize: NT.fBodyMobile + 1, color: CupertinoColors.placeholderText.resolveFrom(context)),
             style: textStyle,
             contentInsertionConfiguration: cfg,
@@ -448,7 +448,7 @@ class _ComposerState extends State<Composer> {
             contentInsertionConfiguration: cfg,
             textInputAction: TextInputAction.newline,
             decoration: InputDecoration(
-              hintText: _shortHint(ctl.placeholder),
+              hintText: _shortHint(ctl.inputHint),
               hintStyle: TextStyle(color: c.muted),
               hintMaxLines: 1,
               filled: true,
@@ -845,7 +845,7 @@ class _OtherMachinesBar extends StatelessWidget {
   }
 }
 
-/// 输入框里打 @ 时的候选：经验、背景知识、资料、技能、工具几组，对上的字标亮
+/// 输入框里打 @ 时的候选：群成员（多人会话时）、经验、背景知识、资料、技能、工具几组，对上的字标亮
 class _MentionList extends StatelessWidget {
   const _MentionList(this.ctl);
   final ChatController ctl;

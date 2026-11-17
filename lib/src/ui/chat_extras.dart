@@ -14,13 +14,14 @@ import 'attachments.dart';
 import 'messages.dart' show SysLine;
 
 // ---------- @ 的类型 ----------
-const mentionNames = {'experience': '经验', 'background': '背景知识', 'library': '资料', 'skill': '技能', 'tool': '工具'};
+const mentionNames = {'experience': '经验', 'background': '背景知识', 'library': '资料', 'skill': '技能', 'tool': '工具', 'person': '群成员'};
 
 IconData refIcon(String type) => switch (type) {
       'background' => Icons.menu_book_outlined,
       'library' => Icons.description_outlined,
       'skill' => Icons.auto_awesome_outlined,
       'tool' => Icons.build_outlined,
+      'person' => Icons.person_outline,
       _ => Icons.lightbulb_outline,
     };
 
