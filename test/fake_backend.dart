@@ -133,6 +133,11 @@ class FakeBackend {
 
   /// /api/start 额外给回的字段（who、offline、borrowedBar…）；/api/reconnect 给回的离线原因
   Map<String, dynamic> startExtra = {};
+
+  /// “始终允许”：每个对话的设置（没有就按链接：startExtra['autoRun']）；收到的 /api/auto-approve 请求
+  final autoOn = <String, bool>{};
+  final autoBodies = <Map<String, dynamic>>[];
+  bool autoFor(String? sid) => autoOn[sid] ?? startExtra['autoRun'] == true;
   String reconnectOffline = '';
 
   /// 一轮开始时 session 事件报的连接状态（offline 时带 offline 原因）
@@ -249,6 +254,16 @@ class FakeBackend {
               'running': false,
               'goal': goal,
             },
+          '/api/auto-approve' => () {
+              autoBodies.add(b);
+              final sid = '${b['sessionId']}';
+              if (b['on'] == null) {
+                autoOn.remove(sid);
+              } else {
+                autoOn[sid] = b['on'] == true;
+              }
+              return {'on': autoFor(sid), 'linkAuto': startExtra['autoRun'] == true};
+            }(),
           '/api/approve' => () {
               approval?.complete(b['allow'] == true);
               return {'ok': true};
@@ -300,6 +315,7 @@ class FakeBackend {
     final turn = 't${++_turn}';
     final first = sessionId == null;
     sessionId ??= 'session-1';
+    if (first && b['autoApprove'] is bool) autoOn[sessionId!] = b['autoApprove'] as bool;
     () async {
       send('start', {'taskId': 'task-$turn', 'turn': turn, 'parent': b['parentTurn']});
       send('user', {
@@ -321,7 +337,7 @@ class FakeBackend {
             {'id': 'k1', 'type': 'experience', 'title': '桌面图标被隐藏的排查方法'}
           ]
       });
-      send('session', {'sessionId': sessionId, 'title': first ? b['message'] : '', 'mcpStatus': mcpStatus, if (mcpStatus == 'offline') 'offline': offlineReason, 'autoApprove': false});
+      send('session', {'sessionId': sessionId, 'title': first ? b['message'] : '', 'mcpStatus': mcpStatus, if (mcpStatus == 'offline') 'offline': offlineReason, 'autoApprove': autoFor(sessionId)});
       if (b['goal'] is Map) {
         goal = {'objective': b['goal']['objective'], 'status': 'active', 'maxTurns': b['goal']['maxTurns'], 'turnsUsed': 0, 'timeUsedMs': 0, 'reason': '', 'summary': ''};
         send('goal', {'goal': goal});

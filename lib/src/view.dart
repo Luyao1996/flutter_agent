@@ -17,6 +17,7 @@ import 'panels/share_panel.dart';
 import 'panels/skills_panel.dart';
 import 'services.dart' as services;
 import 'ui/adaptive.dart';
+import 'ui/auto_switch.dart';
 import 'ui/composer.dart';
 import 'ui/group_view.dart';
 import 'ui/messages.dart';
@@ -194,28 +195,6 @@ class _WhoTag extends StatelessWidget {
   }
 }
 
-/// “本次会话始终允许”已开启的提示条
-class _AutoBanner extends StatelessWidget {
-  const _AutoBanner();
-  @override
-  Widget build(BuildContext context) {
-    final ctl = NetbarScope.of(context).controller;
-    if (!ctl.autoApprove) return const SizedBox.shrink();
-    final c = NetbarColors(context);
-    return Container(
-      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-      padding: const EdgeInsets.fromLTRB(12, 2, 4, 2),
-      decoration: BoxDecoration(color: NT.warn.withValues(alpha: .1), borderRadius: BorderRadius.circular(NT.rSm)),
-      child: Row(children: [
-        Icon(Icons.bolt, size: 16, color: c.warnText),
-        const SizedBox(width: 6),
-        Expanded(child: Text('已开启“本次会话始终允许”，高危操作仍需确认', maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: NT.fCaption, color: c.warnText))),
-        AButton(label: '关闭', small: true, kind: BtnKind.text, onPressed: ctl.autoApproveOff),
-      ]),
-    );
-  }
-}
-
 Future<void> _rename(BuildContext context) async {
   final ctl = NetbarScope.read(context).controller;
   if (ctl.sessionId == null) return;
@@ -239,6 +218,8 @@ List<SheetAction<String>> _moreActions(BuildContext context, {bool withHistory =
   return [
     if (withHistory) const SheetAction('历史对话', 'history', icon: Icons.history),
     if (ctl.isOffline) SheetAction('重新连接这台电脑', 'reconnect', icon: Icons.link, subtitle: '电脑离线：${ctl.offline}', enabled: !ctl.reconnecting),
+    if (!withHistory)
+      SheetAction(ctl.autoApprove ? '始终允许：已开启（点一下关掉）' : '始终允许：已关闭（点一下打开）', 'auto', icon: Icons.bolt, checked: ctl.autoApprove, subtitle: ctl.autoHint),
     const SheetAction('技能', 'skills', icon: Icons.auto_awesome_outlined),
     const SheetAction('知识库', 'kb', icon: Icons.menu_book_outlined),
     SheetAction('记忆', 'memory', icon: Icons.sticky_note_2_outlined, subtitle: ctl.barKey.isEmpty ? '网吧记忆不可用（没有网吧名称）' : null),
@@ -256,6 +237,8 @@ void _onMore(BuildContext context, String? r, {VoidCallback? openHistory}) {
       openHistory?.call();
     case 'reconnect':
       ctl.reconnect();
+    case 'auto':
+      toggleAutoApprove(context);
     case 'skills':
       openSkillsPanel(context);
     case 'kb':
@@ -326,7 +309,6 @@ class _DesktopShellState extends State<_DesktopShell> {
       body: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         _DesktopHeader(onHistory: () => _scaffold.currentState?.openEndDrawer()),
         const Divider(height: 1),
-        const _AutoBanner(),
         Expanded(
           child: DropTarget(
             enable: !kIsWeb,
@@ -412,12 +394,14 @@ class _DesktopHeader extends StatelessWidget {
                   Flexible(child: Text(cfg.machineName, maxLines: 1, overflow: TextOverflow.ellipsis, style: monoStyle(size: NT.fCaption, color: c.muted))),
                 ],
                 _WhoTag(ctl),
-                if (cfg.autoRun) ...[const SizedBox(width: 6), const Tag('自动执行', icon: Icons.bolt)],
                 if (cfg.isDebug) ...[const SizedBox(width: 6), const Tag('调试', color: Color(0xFFA855F7), icon: Icons.bug_report_outlined)],
               ]),
             ]),
           ),
           const SizedBox(width: 8),
+          // “始终允许”开关：宽的时候带说明
+          AutoSwitch(ctl, showHint: mode == 2 && w >= 1000),
+          const SizedBox(width: 4),
           if (mode == 2) ...actions.map(labeled),
           if (mode == 1) ...actions.map(iconOnly),
           if (mode == 0)
@@ -486,7 +470,7 @@ class _NavTitle extends StatelessWidget {
           Flexible(child: Text(ctl.config.machineName, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: NT.fCaption, color: c.muted, fontWeight: FontWeight.w400))),
         ],
         _WhoTag(ctl),
-        if (ctl.config.autoRun) ...[const SizedBox(width: 4), Icon(Icons.bolt, size: 13, color: c.accentText)],
+        AutoTag(ctl),
       ]),
     ]);
   }
@@ -521,7 +505,6 @@ class _CupertinoShell extends StatelessWidget {
         child: Material(
           type: MaterialType.transparency,
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            const _AutoBanner(),
             const Expanded(child: MessageList()),
             Container(
               decoration: BoxDecoration(color: c.background, border: Border(top: BorderSide(color: c.line, width: .5))),
@@ -571,7 +554,6 @@ class _MaterialShell extends StatelessWidget {
                     ]))),
       ),
       body: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        const _AutoBanner(),
         const Expanded(child: MessageList()),
         SafeArea(top: false, child: Padding(padding: const EdgeInsets.fromLTRB(8, 4, 8, 8), child: const Composer())),
       ]),

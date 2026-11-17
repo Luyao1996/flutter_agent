@@ -184,7 +184,8 @@ class ChatController extends ChangeNotifier with ConnStateMixin {
   String title = '';
   String sessionInfo = '新对话';
   String mcpStatus = 'unknown'; // unknown | connected | failed
-  bool autoApprove = false;
+  /// “始终允许”开关：开着时普通改动操作不再询问（客户机链接开着时所有操作都直接执行）；默认按链接，离开对话回到默认
+  late bool autoApprove = config.autoRun;
   bool busy = false;
   String? taskId;
   String? liveTurn;
@@ -290,6 +291,7 @@ class ChatController extends ChangeNotifier with ConnStateMixin {
     notifyListeners();
     try {
       await api.open();
+      autoApprove = autoDefault;
     } on ApiError catch (e) {
       notes.remove(tip);
       // 口令远程通行证作废等（提示里已经说了“重新打开”）不再重复
@@ -538,6 +540,8 @@ class ChatController extends ChangeNotifier with ConnStateMixin {
         'effort': harnessPick.effort,
         if (opts.goal != null) 'goal': opts.goal,
         if (opts.goalContinue) 'goalContinue': true,
+        // 新对话：把开关当前的状态带上（已有对话以后台记的为准）
+        if (sessionId == null) 'autoApprove': autoApprove,
         'origin': config.baseUrl, // 后台用它生成公网下载链接（share_remote_file / download_url）
         'clientId': group.clientId, // 多人会话：后台告诉群里其他页面有新任务时，按它认出是自己发起的
       };
@@ -906,11 +910,30 @@ class ChatController extends ChangeNotifier with ConnStateMixin {
     }
   }
 
-  Future<void> autoApproveOff() async {
-    if (sessionId != null) await api.post('/api/auto-approve/off', {'sessionId': sessionId}).catch_();
-    autoApprove = false;
-    notes.add(LocalNote('sys', '已关闭“始终允许”，之后的改动操作会重新询问你'));
+  // ---------- “始终允许”开关 ----------
+  /// 默认按链接：客户机链接（后台说 autoRun）开，所有操作包括高危都直接执行；其他链接关
+  bool get autoDefault => api.info.env.isEmpty ? config.autoRun : api.info.autoRun;
+
+  /// 开关旁边的说明
+  String get autoHint => autoApprove ? (autoDefault ? '所有操作直接执行' : '高危操作仍需确认') : '改动操作要你确认';
+
+  /// 打开/关掉“始终允许”（普通链接打开前要先让用户看风险说明，由界面负责）；还没有对话时，发第一条消息时带上
+  Future<void> setAutoApprove(bool on) async {
+    final was = autoApprove;
+    autoApprove = on;
     notifyListeners();
+    if (sessionId != null) {
+      try {
+        autoApprove = (await api.post('/api/auto-approve', {'sessionId': sessionId, 'on': on}))['on'] == true;
+      } on ApiError catch (e) {
+        autoApprove = was;
+        notifyListeners();
+        return toast(e.message);
+      }
+      notifyListeners();
+    }
+    // 客户机链接的“直接执行”是这一轮开始时定的：正在进行的这一轮不变
+    toast(on ? '已开启“始终允许”' : '已关闭“始终允许”，之后改动机器的操作会先问你${busy && autoDefault ? '（正在进行的这一轮不变，下一条消息开始生效）' : ''}');
   }
 
   // ---------- 版本切换、重新生成、编辑 ----------
@@ -1040,10 +1063,11 @@ class ChatController extends ChangeNotifier with ConnStateMixin {
 
   // ---------- 对话：新建、打开、改名、删除 ----------
   void _reset() {
-    if (autoApprove && sessionId != null) api.post('/api/auto-approve/off', {'sessionId': sessionId}).catch_();
+    // 离开这个对话：“始终允许”回到默认（后台也清掉这个对话的设置）
+    if (autoApprove != autoDefault && sessionId != null) api.post('/api/auto-approve', {'sessionId': sessionId, 'on': null}).catch_();
     _disconnectAllMachines();
     _cancelStream();
-    autoApprove = false;
+    autoApprove = autoDefault;
     streamingText = null;
     _remoteCalls.clear();
     sessionId = null;
