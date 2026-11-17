@@ -44,6 +44,18 @@ class FakeBackend {
   final startBodies = <Map<String, dynamic>>[];
   bool expireNext = false;
 
+  /// /api/start 额外给回的字段（who、offline、borrowedBar…）；/api/reconnect 给回的离线原因
+  Map<String, dynamic> startExtra = {};
+  String reconnectOffline = '';
+
+  /// 一轮开始时 session 事件报的连接状态（offline 时带 offline 原因）
+  String mcpStatus = 'connected';
+  String offlineReason = '';
+
+  /// 历史对话列表里另加的（例如管理员看到的别人的对话）；/api/sessions/get 给回的内容
+  List<Map<String, dynamic>> extraSessions = [];
+  Map<String, dynamic>? sessionGet;
+
   http.Client client() => MockClient.streaming((req, body) async {
         final path = req.url.path;
         calls.add(path);
@@ -52,8 +64,12 @@ class FakeBackend {
         if (path == '/api/start') {
           startBodies.add(b);
           final env = '${b['env']}';
-          final key = env == 'toolbox' ? '${b['mcp']}' : 'netbar://$env/2/${b['branch']}';
-          return _json({'token': 'conn-${startBodies.length}', 'key': key, 'env': env, if (env != 'toolbox') 'barId': '2'});
+          final key = env == 'pass'
+              ? 'netbar://pass/${Uri.encodeComponent('${b['mcp']}')}'
+              : env == 'toolbox' && b['mcp'] != null
+                  ? '${b['mcp']}'
+                  : 'netbar://$env/2/${b['branch']}';
+          return _json({'token': 'conn-${startBodies.length}', 'key': key, 'env': env, if (env != 'toolbox') 'barId': env == 'pass' ? 'room-abcd' : '2', ...startExtra});
         }
         // 模拟后台重启：下一个请求回“连接已过期”
         if (expireNext && path != '/api/harnesses') {
@@ -78,9 +94,12 @@ class FakeBackend {
           '/api/memory/list' => {'items': memories},
           '/api/sessions' => {
               'sessions': [
-                {'id': 'old-session-1', 'title': '游戏菜单打不开', 'updatedAt': '2026-10-22T10:00:00Z', 'rounds': 3, 'shared': true}
+                {'id': 'old-session-1', 'title': '游戏菜单打不开', 'updatedAt': '2026-10-22T10:00:00Z', 'rounds': 3, 'shared': true},
+                ...extraSessions,
               ]
             },
+          '/api/sessions/get' when sessionGet != null => sessionGet!,
+          '/api/reconnect' => {'offline': reconnectOffline},
           '/api/share/status' => {'share': null},
           '/api/harnesses' => {
               'items': [
@@ -121,7 +140,7 @@ class FakeBackend {
             {'id': 'k1', 'type': 'experience', 'title': '桌面图标被隐藏的排查方法'}
           ]
       });
-      send('session', {'sessionId': sessionId, 'title': first ? b['message'] : '', 'mcpStatus': 'connected', 'autoApprove': false});
+      send('session', {'sessionId': sessionId, 'title': first ? b['message'] : '', 'mcpStatus': mcpStatus, if (mcpStatus == 'offline') 'offline': offlineReason, 'autoApprove': false});
       await Future<void>.delayed(const Duration(milliseconds: 20));
       if (askApproval) {
         send('tool_use', {

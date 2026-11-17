@@ -1,4 +1,5 @@
 // 历史对话：这台机器以前的对话，点开接着处理；可以改名，调试模式下可以删除
+// 用密码打开的（管理员）还能看到这台电脑上别人的对话，标出是从哪里打开的：可以查看、改名、删除，不能接着问
 import 'package:flutter/material.dart';
 
 import '../api.dart';
@@ -51,14 +52,16 @@ class _HistoryListState extends State<HistoryList> {
   }
 
   Future<void> _menu(SessionSummary x) async {
-    final debug = NetbarScope.read(context).controller.config.isDebug;
-    final r = await actionSheet<String>(context, title: x.title, actions: [
+    final ctl = NetbarScope.read(context).controller;
+    final r = await actionSheet<String>(context, title: x.title, message: x.others ? '${x.from}用户在这台电脑上的对话，只能查看' : null, actions: [
       const SheetAction('修改对话名称', 'rename', icon: Icons.edit_outlined),
-      if (debug) const SheetAction('删除这个对话（调试模式）', 'delete', icon: Icons.delete_outline, destructive: true),
+      if (ctl.canDeleteSessions) SheetAction(_deleteLabel(ctl.config.isPass), 'delete', icon: Icons.delete_outline, destructive: true),
     ]);
     if (r == 'rename') _rename(x);
     if (r == 'delete') _delete(x);
   }
+
+  static String _deleteLabel(bool admin) => '删除这个对话${admin ? '' : '（调试模式）'}';
 
   @override
   Widget build(BuildContext context) {
@@ -77,6 +80,7 @@ class _HistoryListState extends State<HistoryList> {
           for (final x in _list!)
             ListRow(
               title: x.title.isEmpty ? '(无标题)' : x.title,
+              chips: [if (x.others) Tag('${x.from}用户', color: c.text2)],
               meta: '${fmtTime(x.updatedAt)} · ${x.rounds} 轮提问${x.id == ctl.sessionId ? ' · 当前对话' : ''}${x.shared ? ' · 已分享' : ''}',
               selected: x.id == ctl.sessionId,
               onTap: () async {
@@ -86,7 +90,8 @@ class _HistoryListState extends State<HistoryList> {
               trailing: s.isDesktop
                   ? Row(mainAxisSize: MainAxisSize.min, children: [
                       AIconButton(icon: Icons.edit_outlined, tooltip: '修改对话名称', size: 15, onPressed: () => _rename(x)),
-                      if (ctl.config.isDebug) AIconButton(icon: Icons.delete_outline, tooltip: '删除这个对话（调试模式）', size: 15, color: c.dangerText, onPressed: () => _delete(x)),
+                      if (ctl.canDeleteSessions)
+                        AIconButton(icon: Icons.delete_outline, tooltip: _deleteLabel(ctl.config.isPass), size: 15, color: c.dangerText, onPressed: () => _delete(x)),
                     ])
                   : null,
             ),
@@ -94,7 +99,7 @@ class _HistoryListState extends State<HistoryList> {
         if (s.isMobile)
           Padding(
               padding: const EdgeInsets.all(16),
-              child: Text('长按一个对话可以改名${ctl.config.isDebug ? '或删除' : ''}', textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: c.faint))),
+              child: Text('长按一个对话可以改名${ctl.canDeleteSessions ? '或删除' : ''}', textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: c.faint))),
       ]),
     );
   }

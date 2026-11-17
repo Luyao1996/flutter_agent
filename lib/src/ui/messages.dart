@@ -87,7 +87,7 @@ class _MessageListState extends State<MessageList> {
       if (ctl.showStartChoices) () => const _StartChoices(),
       for (final t in path) () => TurnView(t, key: ValueKey(t.id), undone: undone, isLast: t.id == lastId),
       for (final n in ctl.notes) () => NoteView(n),
-      if (ctl.historyNote) () => const _Divider('以上是历史记录 · 在下方输入，AI 会记得前面的内容，接着这个对话继续处理'),
+      if (ctl.historyNote) () => _Divider(ctl.historyNoteText),
     ];
     final maxWidth = s.isDesktop ? 860.0 : 760.0;
     return ScrollConfiguration(

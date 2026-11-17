@@ -150,17 +150,23 @@ class DiagOption {
 
 /// 历史对话列表的一项
 class SessionSummary {
-  SessionSummary({required this.id, required this.title, required this.updatedAt, required this.rounds, required this.shared});
+  SessionSummary({required this.id, required this.title, required this.updatedAt, required this.rounds, required this.shared, this.others = false, this.from = ''});
   final String id, title;
   final DateTime? updatedAt;
   final int rounds;
   final bool shared;
+
+  /// 别人在这台电脑上的对话（用密码打开时能看到）；from 是从哪里打开的（toolbox、银杏、云启动…）
+  final bool others;
+  final String from;
   factory SessionSummary.fromJson(Map<String, dynamic> j) => SessionSummary(
         id: str(j['id']),
         title: str(j['title']),
         updatedAt: DateTime.tryParse(str(j['updatedAt']))?.toLocal(),
         rounds: (j['rounds'] as num?)?.toInt() ?? 1,
         shared: j['shared'] == true,
+        others: j['others'] == true,
+        from: str(j['from']),
       );
 }
 

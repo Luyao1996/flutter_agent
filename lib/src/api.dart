@@ -10,6 +10,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import 'config.dart';
+import 'connection.dart';
 import 'models.dart';
 
 /// 接口返回的错误（message 是给用户看的中文）
@@ -70,8 +71,14 @@ class NetbarApi {
   String key = '';
   String conn = '';
 
-  /// yx/cloud 连上后解密出的网吧号（“环境-网吧号”），没传网吧编号和名称时用来区分网吧记忆
+  /// 连上后解密出的网吧号（“环境-网吧号”），没传网吧编号和名称时用来区分网吧记忆（口令远程不用）
   String startedBarKey = '';
+
+  /// /api/start 给回的这次连接的情况：身份（who）、电脑离线的原因、借来的网吧名称等（见 connection.dart）
+  StartInfo info = StartInfo.empty;
+
+  /// 每次连上（包括连接过期后自动重新连上）时通知，ChatController 用来更新离线状态、身份
+  void Function(StartInfo info)? onOpened;
 
   /// 每个请求都要带上的连接信息
   Map<String, dynamic> get connBody => {'mcpUrl': key, 'token': conn};
@@ -87,7 +94,9 @@ class NetbarApi {
         _client.post(_uri('/api/start'), headers: {'Content-Type': 'application/json'}, body: jsonEncode(config.startBody)), startTimeout));
     key = str(d['key']);
     conn = str(d['token']);
-    if (config.isNewEnv && str(d['barId']).isNotEmpty) startedBarKey = '${str(d['env'])}-${str(d['barId'])}';
+    if (str(d['env']) != 'pass' && str(d['barId']).isNotEmpty) startedBarKey = '${str(d['env'])}-${str(d['barId'])}';
+    info = StartInfo.fromJson(d);
+    onOpened?.call(info);
   }
 
   static bool _expired(ApiError e) => e.message.startsWith('连接已过期');
@@ -136,9 +145,9 @@ class NetbarApi {
     }
   }
 
-  /// 普通接口：自动带上连接信息，出错抛 ApiError
-  Future<Map<String, dynamic>> post(String path, [Map<String, dynamic> body = const {}]) => _retry(() async =>
-      _json(await _guard(_client.post(_uri(path), headers: {'Content-Type': 'application/json'}, body: jsonEncode({...connBody, ...body})), requestTimeout)));
+  /// 普通接口：自动带上连接信息，出错抛 ApiError；timeout 不填是 20 秒
+  Future<Map<String, dynamic>> post(String path, [Map<String, dynamic> body = const {}, Duration? timeout]) => _retry(() async => _json(await _guard(
+      _client.post(_uri(path), headers: {'Content-Type': 'application/json'}, body: jsonEncode({...connBody, ...body})), timeout ?? requestTimeout)));
 
   /// 不需要连接信息的查询（例如可用的 AI 列表）
   Future<Map<String, dynamic>> get(String path) async => _json(await _guard(_client.get(_uri(path)), requestTimeout));

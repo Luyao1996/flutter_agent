@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'api.dart';
 import 'config.dart';
+import 'connection.dart';
 import 'models.dart';
 import 'voice/voice_call.dart';
 
@@ -92,12 +93,18 @@ String _uuid() {
   return '${h.substring(0, 8)}-${h.substring(8, 12)}-${h.substring(12, 16)}-${h.substring(16, 20)}-${h.substring(20)}';
 }
 
-class ChatController extends ChangeNotifier {
-  ChatController(this.config, {NetbarApi? api, this.shrinkImage}) : api = api ?? NetbarApi(config) {
+class ChatController extends ChangeNotifier with ConnStateMixin {
+  // 口令远程（用密码打开）调试模式不生效
+  ChatController(NetbarOpsConfig config, {NetbarApi? api, this.shrinkImage})
+      : config = config.isPass && config.isDebug ? config.copyWith(isDebug: false) : config,
+        api = api ?? NetbarApi(config) {
     input.addListener(_onInputChanged);
+    this.api.onOpened = _onOpened;
   }
 
-  final NetbarOpsConfig config;
+  /// 连接配置；口令远程连上后借到网吧名称时会换成带名称的（见 _onOpened）
+  NetbarOpsConfig config;
+  @override
   final NetbarApi api;
 
   /// “这家网吧”的标识（区分网吧记忆）：配置里的网吧编号或名称；都没有时 yx/cloud 用连上后解密出的网吧号
@@ -128,6 +135,7 @@ class ChatController extends ChangeNotifier {
 
   /// 重新生成、编辑重发前，被替换的内容里执行过写操作时调用；返回是否继续
   Future<bool> Function(List<String> executedOps)? onConfirmReplace;
+  @override
   void toast(String m) => onToast?.call(m);
 
   /// 界面状态变了时让界面刷新
@@ -165,6 +173,7 @@ class ChatController extends ChangeNotifier {
   final List<ChatEvent> events = [];
   Map<String, String> selected = {};
   final Map<String, List<LocalNote>> turnNotes = {};
+  @override
   final List<LocalNote> notes = [];
 
   /// 本轮自动检查得到的问题选项，以及哪些选项已经点过
@@ -220,20 +229,31 @@ class ChatController extends ChangeNotifier {
   /// 打开组件：有上次的对话就恢复（还在执行的任务会重新连上），没有就让用户选怎么开始
   Future<void> start() async {
     if (!config.isValid) {
-      notes.add(LocalNote('error', config.isNewEnv ? '缺少连接信息，请传入完整的 token 和 root。' : '缺少远程机器的连接信息，请传入完整的 MCP 地址和令牌。'));
+      notes.add(LocalNote(
+          'error',
+          config.isPass
+              ? '缺少连接信息，请传入完整的 MCP 地址和通行证（mcpToken）。'
+              : config.isNewEnv || config.isToolboxNew
+                  ? '缺少连接信息，请传入完整的 token 和 root。'
+                  : '缺少远程机器的连接信息，请传入完整的 MCP 地址和令牌。'));
       notifyListeners();
       return;
     }
-    // 先连上这台电脑（后台验证令牌；yx/cloud 的 AI 助手没在运行时要先启动，可能要等几十秒）
-    final who = config.isNewEnv ? (config.branch.trim().isEmpty || config.role.trim() == 'server' ? '网吧服务端' : ' ${config.branch.trim()} ') : '这台电脑';
-    final tip = LocalNote('sys', config.isNewEnv ? '正在连接$who，AI 助手没在运行的话要先启动，可能要等几十秒…' : '正在连接$who…');
+    // 先连上这台电脑（后台验证令牌；yx/cloud、toolbox 新格式的 AI 助手没在运行时要先启动，可能要等几十秒）
+    final who = config.mcpUrl.trim().isNotEmpty
+        ? '这台电脑'
+        : config.branch.trim().isNotEmpty && config.role.trim() != 'server'
+            ? ' ${config.branch.trim()} '
+            : '网吧服务端';
+    final tip = LocalNote('sys', config.canLaunch ? '正在连接$who，AI 助手没在运行的话要先启动，可能要等几十秒…' : '正在连接$who…');
     notes.add(tip);
     notifyListeners();
     try {
       await api.open();
     } on ApiError catch (e) {
       notes.remove(tip);
-      notes.add(LocalNote('error', '${e.message} 可以关掉重新打开再试。'));
+      // 口令远程通行证作废等（提示里已经说了“重新打开”）不再重复
+      notes.add(LocalNote('error', e.message.contains('重新打开') ? e.message : '${e.message} 可以关掉重新打开再试。'));
       notifyListeners();
       return;
     }
@@ -278,6 +298,29 @@ class ChatController extends ChangeNotifier {
     toast('已切换到 ${harness?.name ?? id}，下一条消息开始生效');
   }
 
+  /// 每次连上（包括连接过期后自动重连）：更新离线状态；口令远程借到网吧名称时显示出来，“这家网吧”的记忆也用它
+  void _onOpened(StartInfo info) {
+    final b = info.borrowedBar;
+    if (b != null && config.barKey.isEmpty) {
+      final nb = config.netbar;
+      config = config.copyWith(netbarGroup: b.group, netbarName: b.name, netbarSeat: nb['netbarSeat'], netbarIp: nb['netbarIp']);
+    }
+    setOffline(info.offline, tell: true);
+  }
+
+  @override
+  void onlineChanged(bool backOnline) {
+    if (backOnline) mcpStatus = 'connected';
+  }
+
+  /// 能不能删除历史对话：调试模式，或用密码打开的（管理员，这台电脑上谁的对话都能删）
+  bool get canDeleteSessions => config.isDebug || config.isPass;
+
+  /// 打开历史对话后，对话末尾的分隔说明
+  String get historyNoteText => readOnlySession
+      ? '以上是${readOnlyFrom.isEmpty ? '别人' : readOnlyFrom}用户在这台电脑上的对话 · 只能查看，不能接着问；要提问请点“新对话”'
+      : '以上是历史记录 · 在下方输入，AI 会记得前面的内容，接着这个对话继续处理';
+
   void _showStart() {
     showStartChoices = true;
     startPicked = false;
@@ -288,6 +331,7 @@ class ChatController extends ChangeNotifier {
   void pickStart(bool diagnose) {
     if (startPicked) return;
     if (diagnose && busy) return toast('任务执行中，等结束后再开始检查');
+    if (diagnose && isOffline) return toast(ConnStateMixin.offlineDiagnoseTip);
     startPicked = true;
     if (!diagnose) {
       notes.add(LocalNote('ai', '好的，请在下方输入框描述你遇到的问题，越具体越好。'));
@@ -348,6 +392,7 @@ class ChatController extends ChangeNotifier {
 
   /// 发送输入框里的内容（AI 处理中就排队）
   void sendComposer() {
+    if (readOnlySession) return toast(ConnStateMixin.readOnlyTip);
     final c = composerContent();
     if (c.error != null) return toast(c.error!);
     final o = c.opts!;
@@ -363,6 +408,7 @@ class ChatController extends ChangeNotifier {
   /// 发出一轮：opts.hasParent 为 false 时接在当前版本的最后
   Future<void> send(SendOptions opts, {VoidCallback? onFail}) async {
     if (busy || _disposed) return;
+    if (readOnlySession) return toast(ConnStateMixin.readOnlyTip);
     showStartChoices = false;
     final parentTurn = opts.hasParent ? opts.parentTurn : _currentLeaf();
     _diagOptions = null;
@@ -571,10 +617,12 @@ class ChatController extends ChangeNotifier {
     if (str(d['title']).isNotEmpty) title = str(d['title']);
     autoApprove = d['autoApprove'] == true;
     sessionInfo = '对话进行中';
+    // 这一轮开始时后台发现电脑离线了 / 又连上了
+    onSessionStatus(d);
     // Codex、DeepSeek 开始时不报告连接状态（unknown）：连不上会在调用工具时报错
     if (d['mcpStatus'] == 'connected') {
       mcpStatus = 'connected';
-    } else if (d['mcpStatus'] != 'unknown') {
+    } else if (d['mcpStatus'] != 'unknown' && d['mcpStatus'] != 'offline') {
       mcpStatus = 'failed';
       notes.add(LocalNote('error', '远程机器没有连上，请确认链接是否正确、机器是否在线。'));
     }
@@ -842,6 +890,8 @@ class ChatController extends ChangeNotifier {
     lockedOptions.clear();
     editingTurn = null;
     historyNote = false;
+    readOnlySession = false;
+    readOnlyFrom = '';
     if (queue.isNotEmpty) toast('已清空排队中的 ${queue.length} 条消息');
     queue.clear();
     queuePaused = false;
@@ -882,7 +932,10 @@ class ChatController extends ChangeNotifier {
     selected = asMap(session['selected']).map((k, v) => MapEntry(k, str(v)));
     title = str(session['title']);
     sessionInfo = restoring ? '对话进行中' : '历史对话 · ${fmtTime(DateTime.tryParse(str(session['createdAt']))?.toLocal())} 开始';
-    historyNote = !running && !restoring;
+    // 别人在这台电脑上的对话（用密码打开时能看）：只能看，不能接着问
+    readOnlySession = data['readOnly'] == true;
+    readOnlyFrom = str(data['from']);
+    historyNote = !running && (!restoring || readOnlySession);
     _changed();
     loadOtherMachines();
     if (running) _attachRunning();

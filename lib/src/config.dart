@@ -1,7 +1,10 @@
 // 组件的连接配置：对应网页版链接里的参数
 // env=yx / cloud：token（银杏令牌）、root（网吧编号密文）、branch（座位号，空 = 网吧服务端）、
 //   role（这台电脑的角色：client 客户机——所有操作不用确认；console 控制台、server 服务端——要确认；不传按有没有座位号推断）
-// env=toolbox 或不传 env：以前的参数——mcp、token（MCP 令牌）、isclient，多机另带 toolboxToken、merchant_id、sfuroom、sfuaddr
+// env=toolbox 新格式（带 root）：token（登录令牌）、root、branch、role，可以另带当前电脑的 mcp、mcpToken；
+//   不带 mcp 时和 yx 一样，电脑的 AI 助手没在运行就由工具箱启动
+// env=toolbox 或不传 env 的老格式：mcp、token（MCP 令牌）、isclient，多机另带 toolboxToken、merchant_id、sfuroom、sfuaddr
+// env=pass（口令远程，用密码打开，没有登录令牌）：mcp、mcpToken（远程房间的通行证），root（可选）、branch、role（同 yx）
 // 另有网吧分组/名称/机位/IP、isdebug。打开时由后台 /api/start 验证、连上（必要时启动）电脑，换回一个连接编号（见 api.dart）
 import 'package:flutter/foundation.dart';
 
@@ -15,7 +18,8 @@ class NetbarOpsConfig {
     required this.baseUrl,
     this.env = '',
     this.mcpUrl = '',
-    required this.token,
+    this.token = '',
+    this.mcpToken = '',
     this.root = '',
     this.branch = '',
     this.role = '',
@@ -37,12 +41,16 @@ class NetbarOpsConfig {
   /// 网吧经营管家后台的地址，例如 https://xxx.app.wbtun.com
   final String baseUrl;
 
-  /// 网吧环境：yx、cloud，或 toolbox（不填就是 toolbox）
+  /// 网吧环境：yx、cloud、pass（口令远程），或 toolbox（不填就是 toolbox）
   final String env;
 
-  /// toolbox：远程机器的 MCP 地址和令牌（网页版链接里的 mcp、token）；yx/cloud：mcpUrl 不用填，token 是银杏令牌
+  /// toolbox 老格式：远程机器的 MCP 地址和令牌（网页版链接里的 mcp、token）；yx/cloud：mcpUrl 不用填，token 是银杏令牌；
+  /// toolbox 新格式（带 root）：token 是登录令牌，mcpUrl 可以不填；pass：没有 token，只填 mcpUrl 和 mcpToken
   final String mcpUrl;
   final String token;
+
+  /// 当前电脑的 MCP 令牌（网页版链接里的 mcpToken）：pass 是远程房间的通行证（必填）；toolbox 新格式可选
+  final String mcpToken;
 
   /// yx/cloud：网吧编号密文（root）、座位号（branch，空 = 网吧服务端）、这台电脑的角色（role）：
   /// client 客户机（所有操作直接执行）、console 控制台、server 服务端（要确认）；不传按有没有座位号推断，要确认
@@ -78,20 +86,55 @@ class NetbarOpsConfig {
   /// 指定界面风格；不填按平台自动选择
   final NetbarUiStyle? uiStyle;
 
-  /// yx/cloud 用新参数，其余（toolbox、不填）用以前的参数
+  /// yx/cloud 用新参数，其余（toolbox、pass、不填）见下面
   bool get isNewEnv => env.trim() == 'yx' || env.trim() == 'cloud';
 
-  bool get isValid => isNewEnv ? token.trim().isNotEmpty && root.trim().isNotEmpty : mcpUrl.trim().isNotEmpty && token.trim().isNotEmpty;
+  /// 口令远程（env=pass）：用密码打开，没有登录令牌；可以删除这台电脑上的对话，调试模式不生效
+  bool get isPass => env.trim() == 'pass';
+
+  /// toolbox 新格式（带 root）：登录令牌 + 网吧号密文，mcp 可以不带（AI 助手没在运行时由工具箱启动）
+  bool get isToolboxNew => !isNewEnv && !isPass && root.trim().isNotEmpty;
+
+  /// toolbox 老格式（不带 root）
+  bool get isToolboxOld => !isNewEnv && !isPass && root.trim().isEmpty;
+
+  bool get isValid => isPass
+      ? mcpUrl.trim().isNotEmpty && mcpToken.trim().isNotEmpty
+      : isNewEnv || isToolboxNew
+          ? token.trim().isNotEmpty && root.trim().isNotEmpty
+          : mcpUrl.trim().isNotEmpty && token.trim().isNotEmpty;
 
   /// 自动执行模式：所有操作直接执行，不弹确认（后台按 /api/start 时的参数为准）
-  bool get autoRun => isNewEnv ? role.trim() == 'client' : isClient;
+  bool get autoRun => isToolboxOld ? isClient : role.trim() == 'client';
 
-  /// 能不能操作本网吧其他电脑：yx/cloud 都能；toolbox 要传 toolboxToken
-  bool get hasMulti => isNewEnv || toolboxToken.trim().isNotEmpty;
+  /// 能不能操作本网吧其他电脑：yx/cloud、toolbox 新格式都能；toolbox 老格式要传 toolboxToken；口令远程不能
+  bool get hasMulti => !isPass && (!isToolboxOld || toolboxToken.trim().isNotEmpty);
+
+  /// 打开时 AI 助手没在运行会先启动（可能要等几十秒）；只有 toolbox 老格式和口令远程不会
+  bool get canLaunch => !isToolboxOld && !isPass;
 
   /// 打开时交给后台 /api/start 的连接参数（和网页版链接参数同名）
   Map<String, dynamic> get startBody => isNewEnv
       ? {'env': env.trim(), 'token': token.trim(), 'root': root.trim(), 'branch': branch.trim(), if (role.trim().isNotEmpty) 'role': role.trim()}
+      : isToolboxNew
+      ? {
+          'env': 'toolbox',
+          'token': token.trim(),
+          'root': root.trim(),
+          'branch': branch.trim(),
+          if (role.trim().isNotEmpty) 'role': role.trim(),
+          if (mcpUrl.trim().isNotEmpty) 'mcp': mcpUrl.trim(),
+          if (mcpToken.trim().isNotEmpty) 'mcpToken': mcpToken.trim(),
+        }
+      : isPass
+      ? {
+          'env': 'pass',
+          'mcp': mcpUrl.trim(),
+          'mcpToken': mcpToken.trim(),
+          if (root.trim().isNotEmpty) 'root': root.trim(),
+          'branch': branch.trim(),
+          if (role.trim().isNotEmpty) 'role': role.trim(),
+        }
       : {
           'env': 'toolbox',
           'mcp': mcpUrl.trim(),
@@ -106,13 +149,21 @@ class NetbarOpsConfig {
         };
 
   /// 在本机记住草稿、当前对话时用的“这台电脑”标识
-  String get storeKey => isNewEnv ? '${env.trim()}/${root.trim()}/${branch.trim()}' : mcpUrl.trim();
+  String get storeKey => isNewEnv
+      ? '${env.trim()}/${root.trim()}/${branch.trim()}'
+      : isPass
+          ? 'pass/${mcpUrl.trim()}'
+          : isToolboxNew && mcpUrl.trim().isEmpty
+              ? 'toolbox/${root.trim()}/${branch.trim()}'
+              : mcpUrl.trim();
 
   /// 网吧属性：没传分组/名称/机位/IP 时从 name 里拆；机位还是空就用 MCP 地址最后一段
   Map<String, String> get netbar {
     var nb = {'netbarGroup': netbarGroup.trim(), 'netbarName': netbarName.trim(), 'netbarSeat': netbarSeat.trim(), 'netbarIp': netbarIp.trim()};
     if (nb.values.every((v) => v.isEmpty)) nb = splitName(name);
-    if (nb['netbarSeat']!.isEmpty && isNewEnv) nb['netbarSeat'] = branch.trim().isEmpty || role.trim() == 'server' ? '服务端' : branch.trim();
+    // 没给机位：yx/cloud、不带 mcp 的 toolbox 新格式用座位号（空 = 服务端）；口令远程带了座位号或是服务端时也一样
+    final bySeat = isNewEnv || (isToolboxNew && mcpUrl.trim().isEmpty) || (isPass && (branch.trim().isNotEmpty || role.trim() == 'server'));
+    if (nb['netbarSeat']!.isEmpty && bySeat) nb['netbarSeat'] = branch.trim().isEmpty || role.trim() == 'server' ? '服务端' : branch.trim();
     if (nb['netbarSeat']!.isEmpty && mcpUrl.isNotEmpty) {
       final parts = mcpUrl.replaceAll(RegExp(r'/+$'), '').split('/');
       nb['netbarSeat'] = Uri.decodeComponent(parts.last);
@@ -148,18 +199,19 @@ class NetbarOpsConfig {
     }
   }
 
-  NetbarOpsConfig copyWith({bool? isDebug, NetbarUiStyle? uiStyle}) => NetbarOpsConfig(
+  NetbarOpsConfig copyWith({bool? isDebug, NetbarUiStyle? uiStyle, String? netbarGroup, String? netbarName, String? netbarSeat, String? netbarIp}) => NetbarOpsConfig(
         baseUrl: baseUrl,
         env: env,
         mcpUrl: mcpUrl,
         token: token,
+        mcpToken: mcpToken,
         root: root,
         branch: branch,
         role: role,
-        netbarGroup: netbarGroup,
-        netbarName: netbarName,
-        netbarSeat: netbarSeat,
-        netbarIp: netbarIp,
+        netbarGroup: netbarGroup ?? this.netbarGroup,
+        netbarName: netbarName ?? this.netbarName,
+        netbarSeat: netbarSeat ?? this.netbarSeat,
+        netbarIp: netbarIp ?? this.netbarIp,
         name: name,
         barId: barId,
         isClient: isClient,

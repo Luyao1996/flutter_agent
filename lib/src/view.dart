@@ -124,26 +124,71 @@ Future<bool> _confirmReplace(BuildContext context, List<String> ops) {
 }
 
 // ---------- 共用的小部件 ----------
-/// 连接状态：已连接 / 连接失败 / 连接中
+/// 连接状态：已连接 / 连接失败 / 未连接 / 电脑离线（后面跟“重新连接”）
 /// 连接状态和顶栏标题直接拿 controller，不从上层找：iOS 推入新页面时导航栏会飞到别处去做转场动画，那里找不到上层
 class _McpBadge extends StatelessWidget {
-  const _McpBadge(this.ctl);
+  const _McpBadge(this.ctl, {this.compact = false});
   final ChatController ctl;
+
+  /// 手机顶栏：“重新连接”只显示图标（读屏照样念“重新连接”），完整的在“更多”菜单里
+  final bool compact;
   @override
   Widget build(BuildContext context) {
     final c = NetbarColors(context);
-    final (text, color) = switch (ctl.mcpStatus) {
-      'connected' => ('已连接', c.okText),
-      'failed' => ('连接失败', c.dangerText),
-      _ => ('未连接', c.warnText),
-    };
-    return Semantics(
+    final (text, color) = ctl.isOffline
+        ? ('电脑离线', c.dangerText)
+        : switch (ctl.mcpStatus) {
+            'connected' => ('已连接', c.okText),
+            'failed' => ('连接失败', c.dangerText),
+            _ => ('未连接', c.warnText),
+          };
+    final badge = Semantics(
       label: '远程机器$text',
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Container(width: 7, height: 7, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
         const SizedBox(width: 5),
         Text(text, maxLines: 1, style: TextStyle(fontSize: NT.fCaption, color: color, fontWeight: FontWeight.w500)),
       ]),
+    );
+    if (!ctl.isOffline) return badge;
+    // 电脑离线：后面跟一个“重新连接”
+    return Row(mainAxisSize: MainAxisSize.min, children: [
+      Tooltip(message: ctl.offline, child: badge),
+      const SizedBox(width: 6),
+      Semantics(
+        button: true,
+        label: '重新连接',
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: ctl.reconnecting ? null : ctl.reconnect,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              if (ctl.reconnecting) const ASpinner(size: 10) else Icon(Icons.link, size: compact ? 15 : 13, color: c.accentText),
+              if (!compact) ...[
+                SizedBox(width: ctl.reconnecting ? 4 : 2),
+                Text(ctl.reconnecting ? '正在连接…' : '重新连接', maxLines: 1, style: TextStyle(fontSize: NT.fCaption, color: ctl.reconnecting ? c.muted : c.accentText, fontWeight: FontWeight.w500)),
+              ],
+            ]),
+          ),
+        ),
+      ),
+    ]);
+  }
+}
+
+/// 网吧信息后面的身份小标签：云启动 / 银杏 / 工具箱 / 管理员（用密码打开的）
+class _WhoTag extends StatelessWidget {
+  const _WhoTag(this.ctl);
+  final ChatController ctl;
+  @override
+  Widget build(BuildContext context) {
+    final name = ctl.whoLabel;
+    if (name.isEmpty) return const SizedBox.shrink();
+    final c = NetbarColors(context);
+    return Padding(
+      padding: const EdgeInsets.only(left: 6),
+      child: Semantics(label: '当前登录身份：$name', excludeSemantics: true, child: Tag(name, color: c.text2)),
     );
   }
 }
@@ -216,6 +261,7 @@ List<SheetAction<String>> _moreActions(BuildContext context, {bool withHistory =
   final has = ctl.sessionId != null;
   return [
     if (withHistory) const SheetAction('历史对话', 'history', icon: Icons.history),
+    if (ctl.isOffline) SheetAction('重新连接这台电脑', 'reconnect', icon: Icons.link, subtitle: '电脑离线：${ctl.offline}', enabled: !ctl.reconnecting),
     const SheetAction('技能', 'skills', icon: Icons.auto_awesome_outlined),
     const SheetAction('知识库', 'kb', icon: Icons.menu_book_outlined),
     SheetAction('记忆', 'memory', icon: Icons.sticky_note_2_outlined, subtitle: ctl.barKey.isEmpty ? '网吧记忆不可用（没有网吧名称）' : null),
@@ -231,6 +277,8 @@ void _onMore(BuildContext context, String? r, {VoidCallback? openHistory}) {
   switch (r) {
     case 'history':
       openHistory?.call();
+    case 'reconnect':
+      ctl.reconnect();
     case 'skills':
       openSkillsPanel(context);
     case 'kb':
@@ -386,6 +434,7 @@ class _DesktopHeader extends StatelessWidget {
                   Padding(padding: const EdgeInsets.symmetric(horizontal: 6), child: Text('·', style: TextStyle(color: c.faint))),
                   Flexible(child: Text(cfg.machineName, maxLines: 1, overflow: TextOverflow.ellipsis, style: monoStyle(size: NT.fCaption, color: c.muted))),
                 ],
+                _WhoTag(ctl),
                 if (cfg.autoRun) ...[const SizedBox(width: 6), const Tag('自动执行', icon: Icons.bolt)],
                 if (cfg.isDebug) ...[const SizedBox(width: 6), const Tag('调试', color: Color(0xFFA855F7), icon: Icons.bug_report_outlined)],
               ]),
@@ -453,11 +502,12 @@ class _NavTitle extends StatelessWidget {
     return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: center ? CrossAxisAlignment.center : CrossAxisAlignment.start, children: [
       Text(ctl.title.isEmpty ? '远程运维' : ctl.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: c.text)),
       Row(mainAxisSize: MainAxisSize.min, children: [
-        _McpBadge(ctl),
+        _McpBadge(ctl, compact: true),
         if (ctl.config.machineName.isNotEmpty) ...[
           const SizedBox(width: 6),
           Flexible(child: Text(ctl.config.machineName, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: NT.fCaption, color: c.muted, fontWeight: FontWeight.w400))),
         ],
+        _WhoTag(ctl),
         if (ctl.config.autoRun) ...[const SizedBox(width: 4), Icon(Icons.bolt, size: 13, color: c.accentText)],
       ]),
     ]);
