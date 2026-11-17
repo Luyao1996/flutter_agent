@@ -36,6 +36,14 @@ class _InvitePanelState extends State<InvitePanel> {
   }
 
   Future<void> _load() async {
+    // 口令远程打开的不能邀请别人（和网页版一致）
+    if (NetbarScope.read(context).controller.config.isPass) {
+      setState(() {
+        _loading = false;
+        _error = '口令远程方式打开的页面不能邀请别人。';
+      });
+      return;
+    }
     try {
       await _group.refresh();
       _name.text = _group.info?.ownerName ?? defaultOwnerName;

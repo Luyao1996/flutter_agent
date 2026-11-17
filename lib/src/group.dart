@@ -229,6 +229,9 @@ class GroupRoom extends ChangeNotifier {
       // 别人叫 AI 干活了：连上去一起看（自己发起的不用）
       case 'task':
         if (str(m['clientId']) != clientId && chat.sessionId == sid) chat.onRoomTask();
+      // 群里有人改了目标：跟着更新
+      case 'goal':
+        if (chat.sessionId == sid) chat.applyGoal(m['goal']);
       // 主人被踢不会发生；对话被删除时提示一下
       case 'kicked':
         chat.toast(str(m['reason']));
