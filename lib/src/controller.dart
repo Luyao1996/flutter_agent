@@ -149,6 +149,10 @@ class ChatController extends ChangeNotifier with ConnStateMixin {
 
   /// 重新生成、编辑重发前，被替换的内容里执行过写操作时调用；返回是否继续
   Future<bool> Function(List<String> executedOps)? onConfirmReplace;
+
+  /// 点对话里的工具名（“使用了工具”一行、消息里 @ 的工具标签）时调用，参数是工具的 name；
+  /// 由工具面板（或宿主）接管，打开工具窗口并选中它。没设置时组件弹一个简单的详情框
+  void Function(String toolName)? onOpenTool;
   @override
   void toast(String m) => onToast?.call(m);
 
@@ -1272,7 +1276,7 @@ class ChatController extends ChangeNotifier with ConnStateMixin {
       return closeMention();
     }
     if (seq != _mentionSeq) return;
-    const order = ['experience', 'background', 'skill'];
+    const order = ['experience', 'background', 'library', 'skill', 'tool'];
     final list = items.map(asMap).where((x) => !refs.any((r) => r.id == x['id']) && skill?.id != x['id']).toList()
       ..sort((a, b) => order.indexOf(str(a['type'])) - order.indexOf(str(b['type'])));
     mentionItems = list.map(RefItem.fromJson).toList();
@@ -1310,7 +1314,7 @@ class ChatController extends ChangeNotifier with ConnStateMixin {
       if (skill != null && skill!.id != x.id) toast('一条消息只能运行一个技能，已换成“${x.title}”');
       skill = x;
     } else if (refs.length >= maxRefs) {
-      toast('一条消息最多推荐 $maxRefs 条');
+      toast('一条消息最多 @ $maxRefs 条知识或工具');
     } else {
       refs.add(x);
     }

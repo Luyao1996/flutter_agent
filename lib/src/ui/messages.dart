@@ -16,6 +16,7 @@ import '../panels/skills_panel.dart';
 import '../services.dart';
 import 'adaptive.dart';
 import 'attachments.dart';
+import 'chat_extras.dart';
 import 'goal_bar.dart' show goalIcon;
 import 'markdown.dart';
 import 'quota_card.dart';
@@ -348,7 +349,9 @@ class TurnView extends StatelessWidget {
                     ? Icons.document_scanner_outlined
                     : t.kind == 'goal'
                         ? goalIcon(context)
-                        : Icons.summarize_outlined)),
+                        : t.kind == 'voice'
+                            ? Icons.phone_outlined
+                            : Icons.summarize_outlined)),
         if (t.kind == 'diagnose') BranchNav(t),
       ]));
     }
@@ -431,7 +434,17 @@ class TurnView extends StatelessWidget {
           children.add(SysLine(icon: Icons.link, text: '已连接本网吧的另一台电脑：${str(d['seat'])}${str(d['name']).isNotEmpty ? '（${str(d['name'])}）' : ''}'));
         case 'machine_disconnected':
           children.add(SysLine(icon: Icons.link_off, text: '已断开 ${str(d['seat'])}'));
+        case 'tool_used':
+          children.add(ToolUsedLine(d));
+        case 'tool_image':
+          children.add(ToolImageBlock(d));
+        case 'file_shared':
+          children.add(FileSharedCard(d));
+        case 'voice':
+          children.add(VoiceLine(d));
         case 'done':
+          // 语音通话记录的结尾标记：不显示“本轮结束”
+          if (d['voice'] == true) break;
           if (d['isError'] == true && !quotaShown) {
             children.add(ErrorBubble(d['subtype'] == 'error_max_turns'
                 ? '已达到单次最多步数，可以回复“继续”接着处理。'
@@ -451,7 +464,8 @@ class TurnView extends StatelessWidget {
     for (final n in ctl.turnNotes[t.id] ?? const <LocalNote>[]) {
       children.add(NoteView(n));
     }
-    if (!live) children.add(TurnActions(t));
+    // 语音通话记录只展示，没有复制、重新生成等操作
+    if (!live && t.kind != 'voice') children.add(TurnActions(t));
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       for (var i = 0; i < children.length; i++) Padding(padding: EdgeInsets.only(top: i == 0 ? 0 : 12), child: children[i]),
     ]);
@@ -490,9 +504,15 @@ class _UserMessage extends StatelessWidget {
                 _BubbleChip(icon: Icons.auto_awesome_outlined, label: str(t.skill!['name']), skill: true, onTap: () => openSkillsPanel(context, selectId: str(t.skill!['id']))),
               for (final r in t.kbRefs)
                 _BubbleChip(
-                    icon: r.type == 'background' ? Icons.menu_book_outlined : Icons.lightbulb_outline,
+                    icon: refIcon(r.type),
                     label: r.title,
-                    onTap: () => openKbPanel(context, type: r.type, selectId: r.id)),
+                    color: r.type == 'tool' ? toolBubbleColor : null,
+                    // @ 的工具点开看工具；资料库的文件由资料库面板处理，这里不跳
+                    onTap: r.type == 'tool'
+                        ? () => openTool(context, toolNameOfRef(r.id), title: r.title)
+                        : r.type == 'library'
+                            ? null
+                            : () => openKbPanel(context, type: r.type, selectId: r.id)),
             ]),
           ),
         if (t.attachments.isNotEmpty)
@@ -553,14 +573,15 @@ class _UserMessage extends StatelessWidget {
 }
 
 class _BubbleChip extends StatelessWidget {
-  const _BubbleChip({required this.icon, required this.label, required this.onTap, this.skill = false});
+  const _BubbleChip({required this.icon, required this.label, required this.onTap, this.skill = false, this.color});
   final IconData icon;
   final String label;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
   final bool skill;
+  final Color? color;
   @override
   Widget build(BuildContext context) => DecoratedBox(
-        decoration: BoxDecoration(color: skill ? const Color(0x73A855F7) : Colors.white.withValues(alpha: .16), borderRadius: BorderRadius.circular(999)),
+        decoration: BoxDecoration(color: color ?? (skill ? const Color(0x73A855F7) : Colors.white.withValues(alpha: .16)), borderRadius: BorderRadius.circular(999)),
         child: Pressable(
           onTap: onTap,
           radius: 999,
@@ -851,6 +872,9 @@ class ApprovalCard extends StatelessWidget {
     final c = NetbarColors(context);
     final risks = asList(a['risks']).map(str).toList();
     final high = risks.isNotEmpty;
+    // connect：连接本网吧另一台电脑；manual：改动工具库这类每次都要手动确认的（没有“始终允许”）
+    final connect = a['connect'] == true, manual = a['manual'] == true;
+    final what = approvalWhat(a);
     final allowed = result?['allow'] == true;
     final pending = result == null && live;
     final tone = pending ? (high ? NT.danger : NT.warn) : (result == null ? c.muted : (allowed ? NT.ok : NT.danger));
@@ -868,8 +892,16 @@ class ApprovalCard extends StatelessWidget {
     } else if (live) {
       footer = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Wrap(spacing: 8, runSpacing: 8, children: [
-          AButton(label: '允许执行', kind: BtnKind.primary, small: true, onPressed: () => ctl.approve(str(a['id']), allow: true)),
-          if (!high)
+          AButton(
+              label: connect
+                  ? '允许连接'
+                  : manual
+                      ? '允许'
+                      : '允许执行',
+              kind: BtnKind.primary,
+              small: true,
+              onPressed: () => ctl.approve(str(a['id']), allow: true)),
+          if (!high && !connect && !manual)
             AButton(
                 label: '本次会话始终允许',
                 small: true,
@@ -879,7 +911,7 @@ class ApprovalCard extends StatelessWidget {
           AButton(label: '拒绝', kind: BtnKind.danger, small: true, onPressed: () => ctl.approve(str(a['id']), allow: false)),
         ]),
         const SizedBox(height: 6),
-        Text('${high ? '高危操作每次都需要手动允许；' : ''}10 分钟内不处理将自动拒绝', style: TextStyle(fontSize: NT.fCaption, color: c.muted)),
+        Text('${high ? '高危操作每次都需要手动允许；' : manual ? '改动工具库每次都需要手动允许；' : ''}10 分钟内不处理将自动拒绝', style: TextStyle(fontSize: NT.fCaption, color: c.muted)),
       ]);
     } else {
       footer = Text('未处理（对话已中断）', style: TextStyle(fontSize: NT.fCaption, color: c.muted));
@@ -893,19 +925,26 @@ class ApprovalCard extends StatelessWidget {
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Wrap(spacing: 6, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: [
-          if (high) Tag('高危操作', color: c.dangerText) else Icon(Icons.shield_outlined, size: 16, color: pending ? c.warnText : c.muted),
-          Text('要执行会改动机器的操作', style: TextStyle(fontSize: NT.fSmall, color: c.text2)),
-          Text(str(a['tool']), style: monoStyle(size: NT.fSmall, color: c.text).copyWith(fontWeight: FontWeight.w600)),
+          if (high) Tag('高危操作', color: c.dangerText) else Icon(connect ? Icons.link : Icons.shield_outlined, size: 16, color: pending ? c.warnText : c.muted),
+          if (what.isNotEmpty)
+            Text(what, style: TextStyle(fontSize: NT.fSmall, color: c.text2))
+          else ...[
+            Text('要执行会改动机器的操作', style: TextStyle(fontSize: NT.fSmall, color: c.text2)),
+            Text(str(a['tool']), style: monoStyle(size: NT.fSmall, color: c.text).copyWith(fontWeight: FontWeight.w600)),
+          ],
         ]),
         if (high) Padding(padding: const EdgeInsets.only(top: 6), child: Text('风险：${risks.join('；')}', style: TextStyle(fontSize: NT.fCaption, color: c.dangerText))),
-        Container(
-          margin: const EdgeInsets.only(top: 10),
-          width: double.infinity,
-          constraints: const BoxConstraints(maxHeight: 220),
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(color: c.codeBg, borderRadius: BorderRadius.circular(NT.rSm)),
-          child: SingleChildScrollView(child: SelectableText(const JsonEncoder.withIndent('  ').convert(a['input']), style: monoStyle(size: NT.fCaption, color: c.text2))),
-        ),
+        if (LibDescribeList.handles(a))
+          Padding(padding: const EdgeInsets.only(top: 10), child: LibDescribeList(asMap(a['input'])))
+        else
+          Container(
+            margin: const EdgeInsets.only(top: 10),
+            width: double.infinity,
+            constraints: const BoxConstraints(maxHeight: 220),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(color: c.codeBg, borderRadius: BorderRadius.circular(NT.rSm)),
+            child: SingleChildScrollView(child: SelectableText(const JsonEncoder.withIndent('  ').convert(a['input']), style: monoStyle(size: NT.fCaption, color: c.text2))),
+          ),
         const SizedBox(height: 10),
         footer,
       ]),
