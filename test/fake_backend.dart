@@ -16,6 +16,16 @@ class FakeBackend {
   /// 下一次提问时要求确认一个写操作
   bool askApproval = false;
 
+  /// 下一次提问时先推思考过程和一次工具调用（思考 → 调用工具 → 结果）
+  bool withThinking = false;
+
+  /// 下一次提问时 Claude 额度用完、这一轮没做完（retry=false），自动换成 Codex
+  bool quotaFail = false;
+
+  /// 目标模式：后台存的目标（/api/goal 改它；带 goal 的提问设它；每轮结束 turnsUsed+1）
+  Map<String, dynamic>? goal;
+  final goalActions = <Map<String, dynamic>>[];
+
   final kb = [
     {
       'id': 'k1',
@@ -103,11 +113,56 @@ class FakeBackend {
           '/api/share/status' => {'share': null},
           '/api/harnesses' => {
               'items': [
-                {'id': 'claude', 'name': 'Claude', 'desc': 'Anthropic Claude Code', 'available': true},
-                {'id': 'codex', 'name': 'Codex', 'desc': 'OpenAI Codex', 'available': true},
-                {'id': 'dsh', 'name': 'DeepSeek', 'desc': 'DeepSeek Harness', 'available': false},
+                {
+                  'id': 'claude',
+                  'name': 'Claude',
+                  'desc': 'Anthropic Claude Code',
+                  'available': true,
+                  'model': 'claude-opus-5-5',
+                  'models': [
+                    {'id': 'claude-opus-5-5', 'name': 'claude-opus-5-5', 'efforts': ['low', 'medium', 'high', 'xhigh'], 'defaultEffort': 'medium'},
+                    {'id': 'claude-sonnet-5', 'name': 'claude-sonnet-5', 'efforts': ['low', 'medium', 'high', 'xhigh'], 'defaultEffort': 'medium'},
+                  ]
+                },
+                {
+                  'id': 'codex',
+                  'name': 'Codex',
+                  'desc': 'OpenAI Codex',
+                  'available': true,
+                  'model': 'gpt-6.1-sol',
+                  'models': [
+                    {
+                      'id': 'gpt-6.1-sol',
+                      'name': 'GPT-6.1 Sol',
+                      'efforts': ['low', 'medium', 'high'],
+                      'effortDescs': {'low': '快速回答', 'high': '想得更深'},
+                      'defaultEffort': 'medium'
+                    },
+                    {'id': 'gpt-5.1-codex', 'name': 'GPT-5.1 Codex', 'efforts': <String>[], 'defaultEffort': ''},
+                  ]
+                },
+                {'id': 'dsh', 'name': 'DeepSeek', 'desc': 'DeepSeek Harness', 'available': false, 'model': '', 'models': <Object>[]},
               ],
               'default': 'claude'
+            },
+          '/api/goal' => () {
+              goalActions.add(b);
+              final a = b['action'];
+              if (a == 'clear') {
+                goal = null;
+              } else if (goal != null) {
+                if (a == 'pause') goal = {...goal!, 'status': 'paused', 'reason': '你暂停了目标'};
+                if (a == 'resume') goal = {...goal!, 'status': 'active', 'reason': ''};
+                if (a == 'extend') goal = {...goal!, 'status': 'active', 'reason': '', 'maxTurns': (goal!['maxTurns'] as int) + 10};
+                if (a == 'edit') goal = {...goal!, 'objective': b['objective']};
+              }
+              return {'goal': goal, 'running': false};
+            }(),
+          '/api/sessions/get' => {
+              'session': {'id': b['sessionId'], 'title': '旧对话', 'createdAt': '2026-10-22T10:00:00Z', 'selected': <String, String>{}},
+              'events': events,
+              'running': false,
+              'goal': goal,
             },
           '/api/approve' => () {
               approval?.complete(b['allow'] == true);
@@ -131,8 +186,17 @@ class FakeBackend {
     () async {
       send('start', {'taskId': 'task-$turn', 'turn': turn, 'parent': b['parentTurn']});
       send('user', {
-        'text': b['diagnose'] == true ? '🔍 自动检查当前桌面' : b['message'],
-        'kind': b['diagnose'] == true ? 'diagnose' : 'chat',
+        'text': b['diagnose'] == true
+            ? '🔍 自动检查当前桌面'
+            : b['goalContinue'] == true
+                ? '🎯 继续推进目标'
+                : b['message'],
+        'kind': b['diagnose'] == true
+            ? 'diagnose'
+            : b['goalContinue'] == true
+                ? 'goal'
+                : 'chat',
+        'harness': b['harness'] ?? 'claude',
         'turn': turn,
         'parent': b['parentTurn'],
         if ((b['kbRefs'] as List?)?.isNotEmpty == true)
@@ -141,7 +205,39 @@ class FakeBackend {
           ]
       });
       send('session', {'sessionId': sessionId, 'title': first ? b['message'] : '', 'mcpStatus': mcpStatus, if (mcpStatus == 'offline') 'offline': offlineReason, 'autoApprove': false});
+      if (b['goal'] is Map) {
+        goal = {'objective': b['goal']['objective'], 'status': 'active', 'maxTurns': b['goal']['maxTurns'], 'turnsUsed': 0, 'timeUsedMs': 0, 'reason': '', 'summary': ''};
+        send('goal', {'goal': goal});
+      }
       await Future<void>.delayed(const Duration(milliseconds: 20));
+      if (withThinking) {
+        withThinking = false;
+        send('thinking_delta', {'text': '先看看进程'});
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        send('thinking', {'text': '先看看进程列表，找出占用高的程序'});
+        send('tool_use', {
+          'id': 'ps1',
+          'name': 'run_powershell',
+          'input': {'command': 'Get-Process | Sort CPU'}
+        });
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        send('tool_result', {'id': 'ps1', 'isError': false, 'content': 'notepad 12%'});
+      }
+      if (quotaFail) {
+        quotaFail = false;
+        send('text', {'text': '我先看了一下'});
+        send('harness_switch', {
+          'from': 'claude',
+          'to': 'codex',
+          'retry': false,
+          'kind': 'quota',
+          'reason': "You've hit your weekly limit",
+          'text': 'Claude 的额度用完了，这一轮没做完。'
+        });
+        send('done', {'sessionId': sessionId, 'isError': true, 'error': "You've hit your weekly limit", 'turns': 1, 'harness': 'claude'});
+        await ctl.close();
+        return;
+      }
       if (askApproval) {
         send('tool_use', {
           'id': 'tool1',
@@ -165,6 +261,11 @@ class FakeBackend {
       await Future<void>.delayed(const Duration(milliseconds: 10));
       send('text', {'text': '## 检查结果\n这台机器 **CPU 占用正常**，`notepad.exe` 已处理。\n\n- 第一项：显卡驱动正常\n- 第二项：网络正常\n\n| 项目 | 状态 |\n|---|---|\n| 显卡 | 正常 |\n| 网络 | 正常 |'});
       send('kb_used', {'id': 'k1', 'title': '桌面图标被隐藏的排查方法', 'effective': true});
+      if (goal != null && goal!['status'] == 'active') {
+        final used = (goal!['turnsUsed'] as int) + 1;
+        goal = {...goal!, 'turnsUsed': used, if (used >= (goal!['maxTurns'] as int)) 'status': 'budget_limited'};
+        send('goal', {'goal': goal, if (goal!['status'] == 'budget_limited') 'note': '目标已经自动推进了 ${goal!['maxTurns']} 轮，还没完成，先停下。'});
+      }
       send('done', {'sessionId': sessionId, 'isError': false, 'turns': 3, 'cost': 0.0123, 'harness': b['harness'] ?? 'claude'});
       await ctl.close();
     }();

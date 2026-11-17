@@ -11,7 +11,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'api.dart';
 import 'config.dart';
 import 'connection.dart';
+import 'goal.dart';
+import 'harness.dart';
 import 'models.dart';
+import 'progress.dart';
 import 'voice/voice_call.dart';
 
 /// 输入区里待发送的附件
@@ -48,9 +51,15 @@ class SendOptions {
       this.quote = '',
       this.kbRefs = const [],
       this.skillId,
-      this.skillName});
+      this.skillName,
+      this.goal,
+      this.goalContinue = false});
   final String text;
   final bool diagnose, summarize;
+
+  /// 目标模式：goal = 这条消息同时设成对话的目标 {objective, maxTurns}；goalContinue = 自动接着推进目标（没有用户消息）
+  final Map<String, dynamic>? goal;
+  final bool goalContinue;
 
   /// hasParent 为 true 时按 parentTurn 接（null = 从头开始）；否则接在当前版本的最后
   final String? parentTurn;
@@ -70,7 +79,12 @@ class SendOptions {
       quote: quote,
       kbRefs: kbRefs,
       skillId: skillId,
-      skillName: skillName);
+      skillName: skillName,
+      goal: goal,
+      goalContinue: goalContinue);
+
+  SendOptions withGoal(String text, Map<String, dynamic> goal) => SendOptions(
+      text: text, attachments: attachments, quote: quote, kbRefs: kbRefs, skillId: skillId, skillName: skillName, goal: goal);
 }
 
 /// 不属于对话记录、只在界面上显示的提示（例如“请在下方描述问题”）
@@ -167,6 +181,17 @@ class ChatController extends ChangeNotifier with ConnStateMixin {
   List<OtherMachine> otherMachines = [];
   bool thinking = false;
   String thinkingText = 'AI 正在处理…';
+
+  /// 输入框上方的进度条：正在做的事、正在想还没想完的这一段（只有 Claude 边想边推）、这一轮开始处理的时间
+  RunAct act = const RunAct();
+  String thinkLive = '';
+  DateTime? runStartedAt;
+
+  /// 目标模式
+  late final GoalState goal = GoalState(this);
+
+  /// 别处推来的目标状态（例如多人会话房间里的 goal 消息；调用方先确认是当前这个对话）：目标栏跟着更新
+  void applyGoal(dynamic g) => goal.set(GoalInfo.from(g));
   bool showStartChoices = false;
   bool startPicked = false;
   bool historyNote = false;
@@ -200,6 +225,9 @@ class ChatController extends ChangeNotifier with ConnStateMixin {
   List<Harness> harnesses = [];
   String harnessId = '';
   Harness? get harness => harnesses.where((h) => h.id == harnessId).firstOrNull;
+
+  /// 每个 AI 各记一份选的模型和思考深度 {model, effort}（空 = 默认）
+  Map<String, dynamic> harnessPicks = {};
   final DateTime _openedAt = DateTime.now();
   static const diagnoseDelay = Duration(seconds: 3);
 
@@ -261,6 +289,9 @@ class ChatController extends ChangeNotifier with ConnStateMixin {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     harnessId = prefs.getString('netbar_ops.harness') ?? '';
+    try {
+      harnessPicks = asMap(jsonDecode(prefs.getString('netbar_ops.harnessPick') ?? '{}'));
+    } catch (_) {}
     loadHarnesses();
     final draft = prefs.getString(_key('draft'));
     if (draft != null && input.text.isEmpty) input.text = draft;
@@ -289,13 +320,44 @@ class ChatController extends ChangeNotifier with ConnStateMixin {
     } catch (_) {}
   }
 
-  /// 换一个 AI：下一条消息开始生效（同一个对话中途也能换）
+  /// 某个 AI 选的模型、思考深度（不在名单里的当没选）
+  ({String model, String effort}) pickOf(Harness? h) => h == null ? (model: '', effort: '') : validPick(h.model, h.models, asMap(harnessPicks[h.id]));
+  ({String model, String effort}) get harnessPick => pickOf(harness);
+
+  Future<void> _saveHarness(String id, String model, String effort) async {
+    harnessId = id;
+    harnessPicks[id] = {'model': model, 'effort': effort};
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('netbar_ops.harness', id);
+    await prefs.setString('netbar_ops.harnessPick', jsonEncode(harnessPicks));
+  }
+
+  /// 换一个 AI（第一级）：模型和思考深度按默认，下一条消息开始生效（同一个对话中途也能换）
   Future<void> setHarness(String id) async {
     if (id == harnessId) return;
+    await _saveHarness(id, '', '');
+    toast('已换成 ${harness?.name ?? id}，模型和思考深度按默认，下一条消息开始生效');
+  }
+
+  /// 选模型（第二级）：思考深度按默认；选默认模型时不记具体名字，服务器换了默认模型也跟着换
+  Future<void> setHarnessModel(Harness h, HarnessModel m) async {
+    await _saveHarness(h.id, m.id == h.model ? '' : m.id, '');
+    toast('已换成 ${h.name} · ${m.name}，思考深度按默认，下一条消息开始生效');
+  }
+
+  /// 选思考深度（第三级）：effort 空 = 默认
+  Future<void> setHarnessEffort(Harness h, HarnessModel m, String effort) async {
+    await _saveHarness(h.id, m.id == h.model ? '' : m.id, effort);
+    toast('已切换到 ${h.name} · ${m.id} · ${effort.isEmpty ? 'default' : effort}，下一条消息开始生效');
+  }
+
+  /// 后台因为额度用完/接口出错自动换了下一个 AI：选择也跟着换并记住，下一条消息就用它
+  void applyHarnessSwitch(String id) {
+    if (id.isEmpty || id == harnessId) return;
     harnessId = id;
-    notifyListeners();
-    (await SharedPreferences.getInstance()).setString('netbar_ops.harness', id);
-    toast('已切换到 ${harness?.name ?? id}，下一条消息开始生效');
+    SharedPreferences.getInstance().then((p) => p.setString('netbar_ops.harness', id));
+    if (harness == null) loadHarnesses();
   }
 
   /// 每次连上（包括连接过期后自动重连）：更新离线状态；口令远程借到网吧名称时显示出来，“这家网吧”的记忆也用它
@@ -395,8 +457,18 @@ class ChatController extends ChangeNotifier with ConnStateMixin {
     if (readOnlySession) return toast(ConnStateMixin.readOnlyTip);
     final c = composerContent();
     if (c.error != null) return toast(c.error!);
-    final o = c.opts!;
+    var o = c.opts!;
     if (o.text.isEmpty && o.attachments.isEmpty) return;
+    // “/目标 内容”：把这条消息设成对话的目标；只打“/目标”打开设定窗口
+    final g = parseGoalCommand(o.text);
+    if (g != null) {
+      if (g.isEmpty) {
+        input.text = '';
+        return goal.onOpenDialog?.call();
+      }
+      if (goal.unfinished) return toast('这个对话已经有一个目标还没完成，可以在上方修改或清除它');
+      o = o.withGoal(g, {'objective': g, 'maxTurns': goalDefaultTurns});
+    }
     if (busy) {
       clearComposer();
       return enqueue(o);
@@ -413,6 +485,7 @@ class ChatController extends ChangeNotifier with ConnStateMixin {
     final parentTurn = opts.hasParent ? opts.parentTurn : _currentLeaf();
     _diagOptions = null;
     _kbSavedCount = 0;
+    goal.cancelAuto(notify: false);
     _setBusy(true);
     _setThinking(
         true,
@@ -420,7 +493,9 @@ class ChatController extends ChangeNotifier with ConnStateMixin {
             ? 'AI 正在检查桌面…'
             : opts.summarize
                 ? 'AI 正在总结经验…'
-                : 'AI 正在处理…');
+                : opts.goalContinue
+                    ? 'AI 正在推进目标…'
+                    : 'AI 正在处理…');
     var started = false;
     _streamCancel = Completer<void>();
     try {
@@ -438,6 +513,10 @@ class ChatController extends ChangeNotifier with ConnStateMixin {
         'barId': barKey,
         'sessionId': sessionId,
         if (harnessId.isNotEmpty) 'harness': harnessId,
+        'model': harnessPick.model,
+        'effort': harnessPick.effort,
+        if (opts.goal != null) 'goal': opts.goal,
+        if (opts.goalContinue) 'goalContinue': true,
         'origin': config.baseUrl, // 后台用它生成公网下载链接（share_remote_file / download_url）
       };
       await for (final (e, d) in api.stream('/api/chat', body, cancel: _streamCancel!.future)) {
@@ -446,7 +525,12 @@ class ChatController extends ChangeNotifier with ConnStateMixin {
       }
     } on ApiError catch (e) {
       if (!started) onFail?.call();
-      _failLive(e.message);
+      // 自动推进目标没能开始（比如目标刚被暂停了）：只提示一下
+      if (opts.goalContinue && !started) {
+        toast(e.message);
+      } else {
+        _failLive(e.message);
+      }
     } catch (e) {
       if (!started) onFail?.call();
       _failLive('出错了：$e');
@@ -521,8 +605,13 @@ class ChatController extends ChangeNotifier with ConnStateMixin {
     // 这一轮结束了：把结果交给前台去说（放在清掉 liveTurn 之后，options 已经齐了）
     if (_voice?.on == true) _voice!.onRunEnded(diagOptionTitles);
     _changed();
-    // 接着处理排队的消息
-    if (!_disposed) scheduleMicrotask(runQueue);
+    // 接着处理排队的消息；没有排队的、目标还在进行中：过几秒自动接着推进目标
+    if (!_disposed) {
+      scheduleMicrotask(() {
+        runQueue();
+        if (!_disposed) goal.scheduleAuto();
+      });
+    }
   }
 
   void _onLiveEvent(String e, Map<String, dynamic> d) {
@@ -536,12 +625,18 @@ class ChatController extends ChangeNotifier with ConnStateMixin {
       return;
     }
     if (e == 'session') return _onSession(d);
+    // 正在想的这一段（只有 Claude 边想边推）：只显示在进度条上，不进记录
+    if (e == 'thinking_delta') {
+      thinkLive = str(d['text']);
+      return notifyListeners();
+    }
     // 正在生成的文字只用来显示，不算进对话记录；还没写完的选项代码块先不显示
     if (e == 'text_delta') {
       final text = str(d['text']).replaceFirst(RegExp(r'```options[\s\S]*$'), '').trim();
       if (text.isEmpty) return;
       streamingText = text;
       _setThinking(true, 'AI 正在回复…');
+      act = const RunAct('reply');
       return notifyListeners();
     }
     final ev = ChatEvent(e, d, liveTurn);
@@ -553,6 +648,8 @@ class ChatController extends ChangeNotifier with ConnStateMixin {
       }
       notes.clear();
       showStartChoices = false;
+      thinkLive = '';
+      act = const RunAct();
       events.add(ev);
       selected[(d['parent'] as String?) ?? 'root'] = str(d['turn']);
       return _changed();
@@ -562,6 +659,17 @@ class ChatController extends ChangeNotifier with ConnStateMixin {
     events.add(ev);
     t?.events.add(ev);
     switch (e) {
+      case 'thinking':
+        thinkLive = '';
+      case 'goal':
+        // 目标的状态变了（开始、完成、卡住、暂停、轮数用完）：上方的目标栏跟着更新
+        goal.set(GoalInfo.from(d['goal']));
+      case 'harness_switch':
+        applyHarnessSwitch(str(d['to']));
+      case 'queue':
+        // 同时用 AI 的人太多：排队等名额（ahead：前面还有几个；-1 = 轮到了）
+        final ahead = (d['ahead'] as num?)?.toInt() ?? -1;
+        _setThinking(true, ahead >= 0 ? '排队中，前面还有 $ahead 个对话…' : 'AI 正在处理…');
       case 'text':
         final o = splitOptions(str(d['text'])).options;
         if (o != null) _diagOptions = o;
@@ -589,6 +697,9 @@ class ChatController extends ChangeNotifier with ConnStateMixin {
         _setThinking(true);
       case 'approval':
         _setThinking(false);
+        final m = str(d['machine']);
+        act = RunAct('wait', '',
+            d['connect'] == true ? '连接 $m' : '${m.isEmpty ? '' : '［$m］'}${toolLabel(str(d['tool']))}：${oneLine(toolArg(d['input']))}');
         if (_voice?.on == true) _voice!.onApproval(d);
       case 'approval_done':
         _setThinking(true, d['allow'] == true ? 'AI 正在调用工具…' : 'AI 正在处理…');
@@ -631,6 +742,8 @@ class ChatController extends ChangeNotifier with ConnStateMixin {
 
   void _setBusy(bool b) {
     busy = b;
+    runStartedAt = b ? (runStartedAt ?? DateTime.now()) : null;
+    if (!b) thinkLive = '';
     if (_voice?.on == true) _voice!.onBusy(b);
     notifyListeners();
   }
@@ -638,6 +751,8 @@ class ChatController extends ChangeNotifier with ConnStateMixin {
   void _setThinking(bool on, [String text = 'AI 正在处理…']) {
     thinking = on;
     thinkingText = text;
+    // 在等确认时，只有重新开始处理才换掉
+    if (act.kind != 'wait' || on) act = on ? RunAct(text.contains('调用工具') ? 'tool' : 'work', text) : const RunAct();
   }
 
   /// 停止当前这一轮（排队中有消息时先暂停，等用户点“立即处理”）
@@ -799,6 +914,7 @@ class ChatController extends ChangeNotifier with ConnStateMixin {
     if (busy) return toast('任务执行中，等结束后再重新生成');
     if (!await _confirmReplace(t)) return;
     if (t.kind == 'diagnose') return send(SendOptions(diagnose: true).withParent(null));
+    if (t.kind == 'goal') return send(SendOptions(goalContinue: true).withParent(t.parent));
     send(_reuse(t, t.noText ? '' : t.text));
   }
 
@@ -895,6 +1011,9 @@ class ChatController extends ChangeNotifier with ConnStateMixin {
     if (queue.isNotEmpty) toast('已清空排队中的 ${queue.length} 条消息');
     queue.clear();
     queuePaused = false;
+    thinkLive = '';
+    act = const RunAct();
+    goal.set(null, hold: false);
     draftGroup = _uuid();
     _changed();
   }
@@ -936,6 +1055,8 @@ class ChatController extends ChangeNotifier with ConnStateMixin {
     readOnlySession = data['readOnly'] == true;
     readOnlyFrom = str(data['from']);
     historyNote = !running && (!restoring || readOnlySession);
+    // 目标：打开时没有任务在跑，就先不自动推进，等用户点“继续推进”
+    goal.set(GoalInfo.from(data['goal']), hold: !running);
     _changed();
     loadOtherMachines();
     if (running) _attachRunning();
@@ -1215,6 +1336,7 @@ class ChatController extends ChangeNotifier with ConnStateMixin {
     _disposed = true;
     _disconnectAllMachines();
     _voice?.dispose();
+    goal.dispose();
     _cancelStream();
     queue.clear();
     _diagTimer?.cancel();
