@@ -12,6 +12,7 @@ import '../services.dart';
 import '../voice/call_screen.dart';
 import 'adaptive.dart';
 import 'attachments.dart';
+import 'chat_extras.dart';
 
 /// 输入框的标识（测试、宿主应用要找到输入框时用）
 const inputKey = ValueKey('netbar-ops-input');
@@ -219,7 +220,7 @@ class _ComposerState extends State<Composer> {
       const SheetAction('拍照', 'camera', icon: Icons.photo_camera_outlined),
       const SheetAction('从相册选择', 'gallery', icon: Icons.photo_library_outlined),
       const SheetAction('选择文件', 'file', icon: Icons.attach_file),
-      const SheetAction('推荐知识库内容或技能（@）', 'at', icon: Icons.alternate_email),
+      const SheetAction('推荐知识、技能或工具（@）', 'at', icon: Icons.alternate_email),
       const SheetAction('运行技能…', 'skill', icon: Icons.auto_awesome_outlined),
       SheetAction('总结经验到知识库', 'summarize', icon: Icons.summarize_outlined, enabled: ctl.sessionId != null && !ctl.busy),
       if (ctl.harnesses.length > 1) SheetAction('切换 AI（现在是 ${ctl.harness?.name ?? '默认'}）', 'harness', icon: Icons.swap_horiz),
@@ -335,7 +336,7 @@ class _ComposerState extends State<Composer> {
                     icon: _recording ? Icons.mic : Icons.mic_none, color: _recording ? NT.danger : null, tooltip: _recording ? '停止语音输入' : '语音输入', onPressed: _toggleVoice),
               AIconButton(
                   icon: Icons.alternate_email,
-                  tooltip: '推荐知识库里的经验、背景知识，或选一个技能运行（也可以直接输入 @）',
+                  tooltip: '推荐知识库里的经验、背景知识，选一个技能运行，或指定工具库里的工具（也可以直接输入 @）',
                   onPressed: () {
                     ctl.insertAt();
                     _focus.requestFocus();
@@ -732,7 +733,7 @@ class _RefChips extends StatelessWidget {
     final purple = c.dark ? const Color(0xFFC084FC) : const Color(0xFF7E22CE);
     return Wrap(spacing: 4, runSpacing: 4, children: [
       if (ctl.skill != null) chip(Icons.auto_awesome_outlined, ctl.skill!.title, purple, ctl.clearSkill),
-      for (final r in ctl.refs) chip(r.type == 'background' ? Icons.menu_book_outlined : Icons.lightbulb_outline, r.title, c.accentText, () => ctl.removeRef(r)),
+      for (final r in ctl.refs) chip(refIcon(r.type), r.title, r.type == 'tool' ? toolColor(c.dark) : c.accentText, () => ctl.removeRef(r)),
     ]);
   }
 }
@@ -823,12 +824,10 @@ class _OtherMachinesBar extends StatelessWidget {
   }
 }
 
-/// 输入框里打 @ 时的候选：经验、背景知识、技能三组，对上的字标亮
+/// 输入框里打 @ 时的候选：经验、背景知识、资料、技能、工具几组，对上的字标亮
 class _MentionList extends StatelessWidget {
   const _MentionList(this.ctl);
   final ChatController ctl;
-  static const _names = {'experience': '经验', 'background': '背景知识', 'skill': '技能'};
-  static const _icons = {'experience': Icons.lightbulb_outline, 'background': Icons.menu_book_outlined, 'skill': Icons.auto_awesome_outlined};
 
   List<TextSpan> _mark(String title, String q, Color hi) {
     q = q.toLowerCase().replaceAll(RegExp(r'\s+'), '');
@@ -859,7 +858,7 @@ class _MentionList extends StatelessWidget {
       if (x.type != last) {
         last = x.type;
         rows.add(Padding(
-            padding: const EdgeInsets.fromLTRB(10, 6, 10, 2), child: Text(_names[x.type] ?? '', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: c.muted))));
+            padding: const EdgeInsets.fromLTRB(10, 6, 10, 2), child: Text(mentionNames[x.type] ?? '', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: c.muted))));
       }
       rows.add(DecoratedBox(
         decoration: BoxDecoration(color: i == ctl.mentionIndex && s.isDesktop ? NT.accent.withValues(alpha: .14) : Colors.transparent, borderRadius: BorderRadius.circular(NT.rSm)),
@@ -870,7 +869,7 @@ class _MentionList extends StatelessWidget {
           child: Padding(
             padding: EdgeInsets.symmetric(horizontal: 10, vertical: s.isMobile ? 9 : 6),
             child: Row(children: [
-              Icon(_icons[x.type], size: 16, color: c.accentText),
+              Icon(refIcon(x.type), size: 16, color: x.type == 'tool' ? toolColor(c.dark) : c.accentText),
               const SizedBox(width: 8),
               Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -894,7 +893,7 @@ class _MentionList extends StatelessWidget {
       child: rows.isEmpty
           ? Padding(
               padding: const EdgeInsets.all(10),
-              child: Text(ctl.mentionQuery.isEmpty ? '知识库和技能都还是空的' : '知识库和技能里都没有找到“${ctl.mentionQuery}”', style: TextStyle(fontSize: NT.fCaption, color: c.muted)))
+              child: Text(ctl.mentionQuery.isEmpty ? '知识库、技能和工具都还是空的' : '知识库、技能和工具里都没有找到“${ctl.mentionQuery}”', style: TextStyle(fontSize: NT.fCaption, color: c.muted)))
           : Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
               Flexible(child: ListView(shrinkWrap: true, padding: EdgeInsets.zero, children: rows)),
               if (s.isDesktop)

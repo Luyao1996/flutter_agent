@@ -196,7 +196,7 @@ class _Bubbles extends StatelessWidget {
               curve: Curves.easeOut,
               child: Align(
                 alignment: b.isUser ? Alignment.centerRight : Alignment.centerLeft,
-                child: _bubble(c, b.isUser, b.text),
+                child: b.choices != null ? _choices(c, b.choices!) : _bubble(c, b.isUser, b.text),
               ),
             ),
           ),
@@ -219,6 +219,39 @@ class _Bubbles extends StatelessWidget {
       ),
     );
   }
+
+  /// 选项气泡：不会淡出，用户说“第几个”选完才收起
+  Widget _choices(NetbarColors c, List<String> items) => Container(
+        constraints: const BoxConstraints(maxWidth: 520),
+        margin: const EdgeInsets.only(right: 24),
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+        decoration: BoxDecoration(
+          color: c.raised,
+          borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(18), topRight: Radius.circular(18), bottomLeft: Radius.circular(6), bottomRight: Radius.circular(18)),
+          border: Border.all(color: NT.accent),
+          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: c.dark ? 0.3 : 0.1), blurRadius: 12, offset: const Offset(0, 4))],
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          Text('请选择（说“第几个”就行）', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: c.accentText)),
+          for (var i = 0; i < items.length; i++)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Container(
+                  width: 20,
+                  height: 20,
+                  margin: const EdgeInsets.only(top: 1),
+                  alignment: Alignment.center,
+                  decoration: const BoxDecoration(color: NT.accent, shape: BoxShape.circle),
+                  child: Text('${i + 1}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white)),
+                ),
+                const SizedBox(width: 8),
+                Expanded(child: Text(items[i], style: TextStyle(fontSize: 15, height: 1.45, color: c.text))),
+              ]),
+            ),
+        ]),
+      );
 
   Widget _bubble(NetbarColors c, bool isUser, String text) {
     final bg = isUser ? NT.accent : c.raised;

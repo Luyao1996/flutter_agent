@@ -36,12 +36,15 @@ class VoiceOption {
   factory VoiceOption.fromJson(Map<String, dynamic> j) => VoiceOption(str(j['id']), str(j['name']), str(j['gender']));
 }
 
-/// 通话界面上的一条聊天气泡（显示几秒后自动淡出）
+/// 通话界面上的一条聊天气泡（显示几秒后自动淡出；选项气泡不淡出，选完才收起）
 class VoiceBubble {
-  VoiceBubble(this.id, this.isUser, this.text, {this.pending = false});
+  VoiceBubble(this.id, this.isUser, this.text, {this.pending = false, this.choices});
   final int id;
   final bool isUser;
   String text;
+
+  /// 要用户选择时的选项（语音会逐个念出来，这里列出来方便看）
+  final List<String>? choices;
   bool pending; // 还没出文字：先占位不显示
   bool gone = false; // 正在淡出
   Timer? timer;
@@ -63,6 +66,9 @@ class VoiceCallController extends ChangeNotifier {
   String phaseHint = '';
   String machineLabel = '';
   final List<VoiceBubble> bubbles = [];
+
+  /// 正在等用户选的选项（没有时为空）
+  List<String> choices = const [];
   List<VoiceOption> voices = [];
   String voiceId = '';
   String get voiceName => voices.firstWhere((v) => v.id == voiceId, orElse: () => VoiceOption('', '音色', '')).name;
@@ -217,6 +223,7 @@ class VoiceCallController extends ChangeNotifier {
       b.timer?.cancel();
     }
     bubbles.clear();
+    choices = const [];
     _youBubble = _aiBubble = null;
     _releasePlayback();
     notifyListeners();
@@ -355,6 +362,10 @@ class VoiceCallController extends ChangeNotifier {
   }
 
   // ---------- 服务端事件 ----------
+  /// 测试用：模拟收到一条语音服务的事件
+  @visibleForTesting
+  void debugEvent(Map<String, dynamic> m) => _event(m);
+
   void _event(Map<String, dynamic> m) {
     switch (str(m['type'])) {
       case 'ready':
@@ -401,7 +412,11 @@ class VoiceCallController extends ChangeNotifier {
         _fadeBubble(_aiBubble);
         _fadeBubble(_youBubble);
         if (!_playing) _settle();
+      case 'choices':
+        showChoices(asList(m['items']).map(str).where((x) => x.isNotEmpty).toList());
       case 'delegate':
+        // 用户回答了（交出去执行）：选项收起
+        clearChoices();
         chat.sendVoiceObjective(str(m['objective']));
       case 'cancel_task':
         chat.stopByUser();
@@ -428,14 +443,40 @@ class VoiceCallController extends ChangeNotifier {
   String _tail(String s) => s.length <= 60 ? s : s.substring(s.length - 60);
 
   // ---------- 气泡 ----------
-  VoiceBubble _newBubble(bool isUser, String text) {
-    final b = VoiceBubble(_bubbleSeq++, isUser, text, pending: text.isEmpty);
+  VoiceBubble _newBubble(bool isUser, String text, {List<String>? choices}) {
+    final b = VoiceBubble(_bubbleSeq++, isUser, text, pending: text.isEmpty && choices == null, choices: choices);
     bubbles.add(b);
+    // 超出数量先删最早的普通气泡；选项气泡要留到用户选完
     while (bubbles.length > _bubbleMax) {
-      bubbles.removeAt(0).timer?.cancel();
+      final i = bubbles.indexWhere((x) => x.choices == null);
+      bubbles.removeAt(i < 0 ? 0 : i).timer?.cancel();
     }
     notifyListeners();
     return b;
+  }
+
+  /// 要用户选择：列一个不会自动淡出的选项气泡（换一组选项时替换掉旧的）
+  void showChoices(List<String> items) {
+    choices = items;
+    bubbles.removeWhere((b) => b.choices != null);
+    if (items.isNotEmpty && on) {
+      _newBubble(false, '', choices: items);
+    } else {
+      notifyListeners();
+    }
+  }
+
+  /// 用户选完（或挂断）：选项气泡淡出收起
+  void clearChoices() {
+    choices = const [];
+    for (final b in bubbles.where((b) => b.choices != null && !b.gone).toList()) {
+      b.gone = true;
+      Timer(_fadeAnim, () {
+        bubbles.remove(b);
+        notifyListeners();
+      });
+    }
+    notifyListeners();
   }
 
   void _fillBubble(VoiceBubble b, String text) {
@@ -481,6 +522,7 @@ class VoiceCallController extends ChangeNotifier {
       final b = _newBubble(h.$1, h.$2);
       _fadeBubble(b);
     }
+    if (choices.isNotEmpty) _newBubble(false, '', choices: choices);
   }
 
   // ---------- 和文字对话的衔接（ChatController 在运行时调用）----------
