@@ -16,7 +16,9 @@ import '../panels/skills_panel.dart';
 import '../services.dart';
 import 'adaptive.dart';
 import 'attachments.dart';
+import 'goal_bar.dart' show goalIcon;
 import 'markdown.dart';
+import 'quota_card.dart';
 
 const _harnessNames = {'claude': 'Claude', 'codex': 'Codex', 'dsh': 'DeepSeek'};
 
@@ -339,16 +341,36 @@ class TurnView extends StatelessWidget {
       children.add(ctl.editingTurn == t.id ? _EditBox(t) : _UserMessage(t));
     } else {
       children.add(Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-        Flexible(child: SysLine(text: t.text.replaceFirst(RegExp(r'^\S+\s*'), ''), icon: t.kind == 'diagnose' ? Icons.document_scanner_outlined : Icons.summarize_outlined)),
+        Flexible(
+            child: SysLine(
+                text: t.text.replaceFirst(RegExp(r'^\S+\s*'), ''),
+                icon: t.kind == 'diagnose'
+                    ? Icons.document_scanner_outlined
+                    : t.kind == 'goal'
+                        ? goalIcon(context)
+                        : Icons.summarize_outlined)),
         if (t.kind == 'diagnose') BranchNav(t),
       ]));
     }
     final approvals = {for (final e in t.events.where((e) => e.e == 'approval_done')) str(e.d['id']): e.d};
     final harnessName = _harnessNames[str(t.user['harness'])];
+    // 已经有“额度用完、去重试”的提示卡时，不再重复显示那段英文报错
+    var quotaShown = false;
     for (var i = 0; i < t.events.length; i++) {
       final ev = t.events[i];
       final d = ev.d;
       switch (ev.e) {
+        case 'harness_switch':
+          if (d['retry'] == false) {
+            quotaShown = true;
+            children.add(QuotaCard(t, d, canRetry: isLast && !live));
+          } else {
+            children.add(SysLine(icon: Icons.warning_amber_rounded, text: str(d['text']), color: c.warnText));
+          }
+        case 'goal':
+          if (str(d['note']).isNotEmpty) {
+            children.add(SysLine(icon: goalIcon(context), text: str(d['note']), color: asMap(d['goal'])['status'] == 'complete' ? c.okText : null));
+          }
         case 'text':
           final sp = splitOptions(str(d['text']));
           final key = '${t.id}:$i';
@@ -410,7 +432,7 @@ class TurnView extends StatelessWidget {
         case 'machine_disconnected':
           children.add(SysLine(icon: Icons.link_off, text: '已断开 ${str(d['seat'])}'));
         case 'done':
-          if (d['isError'] == true) {
+          if (d['isError'] == true && !quotaShown) {
             children.add(ErrorBubble(d['subtype'] == 'error_max_turns'
                 ? '已达到单次最多步数，可以回复“继续”接着处理。'
                 : str(d['error']).isNotEmpty
@@ -421,7 +443,7 @@ class TurnView extends StatelessWidget {
           final who = _harnessNames[str(d['harness'])] ?? harnessName;
           children.add(SysLine(text: '本轮结束${who == null ? '' : ' · $who'} · ${d['turns'] ?? '-'} 步$cost'));
         case 'error':
-          children.add(ErrorBubble(str(d['error'])));
+          if (!quotaShown) children.add(ErrorBubble(str(d['error'])));
       }
     }
     // 正在生成、还没写完的这段

@@ -12,6 +12,9 @@ import '../services.dart';
 import '../voice/call_screen.dart';
 import 'adaptive.dart';
 import 'attachments.dart';
+import 'goal_bar.dart';
+import 'harness_menu.dart';
+import 'run_bar.dart';
 
 /// 输入框的标识（测试、宿主应用要找到输入框时用）
 const inputKey = ValueKey('netbar-ops-input');
@@ -41,10 +44,17 @@ class _ComposerState extends State<Composer> {
       _ctl = ctl..input.addListener(_watchPaste);
       _prevText = ctl.input.text;
     }
+    // 输入框里只打“/目标”：打开设定目标的窗口
+    ctl.goal.onOpenDialog = _openGoal;
+  }
+
+  void _openGoal() {
+    if (mounted) openGoalDialog(context);
   }
 
   @override
   void dispose() {
+    if (_ctl?.goal.onOpenDialog == _openGoal) _ctl!.goal.onOpenDialog = null;
     _ctl?.input.removeListener(_watchPaste);
     _focus.dispose();
     super.dispose();
@@ -188,18 +198,8 @@ class _ComposerState extends State<Composer> {
     ctl.runSkill(list.firstWhere((x) => x.id == r));
   }
 
-  /// 切换处理问题的 AI（Claude / Codex / DeepSeek），下一条消息开始生效
-  Future<void> _harnessMenu([Rect? anchor]) async {
-    final ctl = _ctl!;
-    if (ctl.harnesses.isEmpty) await ctl.loadHarnesses();
-    if (!mounted) return;
-    if (ctl.harnesses.isEmpty) return showToast(context, '没有取到可用的 AI 列表，请稍后再试');
-    final r = await actionSheet<String>(context, title: '处理问题的 AI', message: '切换后从下一条消息开始生效', anchor: anchor, actions: [
-      for (final h in ctl.harnesses)
-        SheetAction(h.name, h.id, enabled: h.available, checked: h.id == ctl.harnessId, subtitle: h.available ? h.desc : '这台服务器上没有安装或没有登录'),
-    ]);
-    if (r != null && mounted) ctl.setHarness(r);
-  }
+  /// 切换处理问题的 AI、模型和思考深度（手机上的分级面板；电脑上是输入卡片里的级联菜单），下一条消息开始生效
+  Future<void> _harnessMenu() => showHarnessSheet(context);
 
   /// 开始/回到语音通话：没开就先连（要麦克风权限），成功后进全屏通话界面
   Future<void> _openCall() async {
@@ -221,8 +221,11 @@ class _ComposerState extends State<Composer> {
       const SheetAction('选择文件', 'file', icon: Icons.attach_file),
       const SheetAction('推荐知识库内容或技能（@）', 'at', icon: Icons.alternate_email),
       const SheetAction('运行技能…', 'skill', icon: Icons.auto_awesome_outlined),
+      SheetAction(ctl.goal.unfinished ? '修改目标（目标模式）' : '设定目标（目标模式）', 'goal',
+          icon: Icons.track_changes, subtitle: 'AI 一轮接一轮自动做下去，直到核对确实完成；也可以在输入框打“/目标 内容”'),
       SheetAction('总结经验到知识库', 'summarize', icon: Icons.summarize_outlined, enabled: ctl.sessionId != null && !ctl.busy),
-      if (ctl.harnesses.length > 1) SheetAction('切换 AI（现在是 ${ctl.harness?.name ?? '默认'}）', 'harness', icon: Icons.swap_horiz),
+      if (ctl.harnesses.length > 1)
+        SheetAction('切换 AI（现在是 ${[ctl.harness?.name ?? '默认', harnessDetail(ctl)].where((x) => x.isNotEmpty).join(' · ')}）', 'harness', icon: Icons.swap_horiz),
     ]);
     if (!mounted) return;
     switch (r) {
@@ -239,6 +242,8 @@ class _ComposerState extends State<Composer> {
         _skillMenu();
       case 'summarize':
         ctl.summarize();
+      case 'goal':
+        openGoalDialog(context);
       case 'harness':
         _harnessMenu();
     }
@@ -265,10 +270,13 @@ class _ComposerState extends State<Composer> {
       listenable: ctl.voice,
       builder: (context, _) {
         final top = <Widget>[
+          if (ctl.goal.goal != null) GoalBar(ctl),
           if (ctl.voice.on && !ctl.voice.expanded) const CompactVoiceBar(),
           if (ctl.otherMachines.isNotEmpty) _OtherMachinesBar(ctl),
           if (ctl.queue.isNotEmpty) _QueueBox(ctl),
           if (ctl.mentionOpen) _MentionList(ctl),
+          // 进度条：AI 正在做什么、用了多久，查看详情、停止（没有内容时不占地方）
+          if (ctl.busy || progressSteps(ctl).isNotEmpty) const RunBar(),
         ];
         return s.isDesktop ? _desktop(context, ctl, extras, top) : _mobile(context, ctl, extras, top);
       },
@@ -345,6 +353,13 @@ class _ComposerState extends State<Composer> {
                   builder: (bctx) => _ToolButton(
                       icon: Icons.auto_awesome_outlined, label: '技能', compact: compact, tooltip: '选一个技能运行', onPressed: () => _skillMenu(rectOf(bctx)))),
               _ToolButton(
+                  icon: Icons.track_changes,
+                  label: '目标',
+                  compact: compact,
+                  active: ctl.goal.unfinished,
+                  tooltip: '目标模式：写下要达成的目标，AI 会一轮接一轮自动做下去，直到核对确实完成（也可以在输入框里打“/目标 内容”）',
+                  onPressed: ctl.config.isValid ? () => openGoalDialog(context) : null),
+              _ToolButton(
                   icon: Icons.summarize_outlined,
                   label: '总结',
                   compact: compact,
@@ -352,14 +367,15 @@ class _ComposerState extends State<Composer> {
                   onPressed: ctl.sessionId == null || ctl.busy ? null : ctl.summarize),
               const Spacer(),
               if (ctl.harnesses.isNotEmpty)
-                Builder(
-                    builder: (bctx) => _ToolButton(
+                HarnessMenuAnchor(
+                    builder: (bctx, toggle) => _ToolButton(
                         icon: Icons.memory_outlined,
-                        label: h?.name ?? 'AI',
+                        label: [h?.name ?? 'AI', harnessDetail(ctl)].where((x) => x.isNotEmpty).join(' · '),
                         trailing: Icons.expand_more,
                         compact: compact && w < 400,
-                        tooltip: '切换处理问题的 AI',
-                        onPressed: () => _harnessMenu(rectOf(bctx)))),
+                        maxWidth: 220,
+                        tooltip: harnessTooltip(ctl),
+                        onPressed: toggle)),
               const SizedBox(width: 6),
               if (ctl.busy) ...[_RoundButton(stop: true, tooltip: '停止', onPressed: ctl.stopByUser), const SizedBox(width: 6)],
               _RoundButton(
@@ -507,16 +523,21 @@ class _RecDotState extends State<_RecDot> with SingleTickerProviderStateMixin {
 
 /// 输入卡片工具栏里带文字的小按钮（窄的时候只显示图标）
 class _ToolButton extends StatelessWidget {
-  const _ToolButton({required this.icon, required this.label, required this.tooltip, required this.onPressed, this.compact = false, this.trailing});
+  const _ToolButton(
+      {required this.icon, required this.label, required this.tooltip, required this.onPressed, this.compact = false, this.trailing, this.active = false, this.maxWidth = 160});
   final IconData icon;
   final IconData? trailing;
   final String label, tooltip;
   final VoidCallback? onPressed;
   final bool compact;
+
+  /// 高亮（例如对话设了目标还没完成）
+  final bool active;
+  final double maxWidth;
   @override
   Widget build(BuildContext context) {
     final c = NetbarColors(context);
-    final col = onPressed == null ? c.faint : c.muted;
+    final col = onPressed == null ? c.faint : (active ? c.accentText : c.muted);
     return Tooltip(
       message: tooltip,
       child: Pressable(
@@ -525,7 +546,7 @@ class _ToolButton extends StatelessWidget {
         label: compact ? label : null,
         child: Container(
           height: 30,
-          constraints: const BoxConstraints(minWidth: 30, maxWidth: 160),
+          constraints: BoxConstraints(minWidth: 30, maxWidth: maxWidth),
           padding: EdgeInsets.symmetric(horizontal: compact ? 7 : 8),
           child: Row(mainAxisSize: MainAxisSize.min, children: [
             Icon(icon, size: 16, color: col),

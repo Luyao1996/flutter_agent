@@ -10,6 +10,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import 'config.dart';
+import 'harness.dart';
 import 'models.dart';
 
 /// 接口返回的错误（message 是给用户看的中文）
@@ -21,12 +22,19 @@ class ApiError implements Exception {
   String toString() => message;
 }
 
-/// 可以切换的 AI（Claude、Codex、DeepSeek）
+/// 可以切换的 AI（Claude、Codex、DeepSeek）；model 是服务器设置的默认模型，models 是能选的模型和思考深度
 class Harness {
-  Harness({required this.id, required this.name, required this.desc, required this.available});
-  final String id, name, desc;
+  Harness({required this.id, required this.name, required this.desc, required this.available, this.model = '', this.models = const []});
+  final String id, name, desc, model;
   final bool available;
-  factory Harness.fromJson(Map<String, dynamic> j) => Harness(id: str(j['id']), name: str(j['name']), desc: str(j['desc']), available: j['available'] == true);
+  final List<HarnessModel> models;
+  factory Harness.fromJson(Map<String, dynamic> j) => Harness(
+      id: str(j['id']),
+      name: str(j['name']),
+      desc: str(j['desc']),
+      available: j['available'] == true,
+      model: str(j['model']),
+      models: asList(j['models']).map((m) => HarnessModel.fromJson(asMap(m))).toList());
 }
 
 /// 上传用的请求：服务端读多少就交多少，进度是真实的发送进度

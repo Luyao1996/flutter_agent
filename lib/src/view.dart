@@ -148,30 +148,6 @@ class _McpBadge extends StatelessWidget {
   }
 }
 
-/// AI 正在处理 / 正在调用工具
-class _StatusLine extends StatelessWidget {
-  const _StatusLine();
-  @override
-  Widget build(BuildContext context) {
-    final ctl = NetbarScope.of(context).controller;
-    final c = NetbarColors(context);
-    return AnimatedSize(
-      duration: const Duration(milliseconds: 150),
-      alignment: Alignment.topCenter,
-      child: !ctl.thinking
-          ? const SizedBox(width: double.infinity)
-          : Padding(
-              padding: const EdgeInsets.fromLTRB(16, 2, 16, 4),
-              child: Row(children: [
-                const ASpinner(size: 12),
-                const SizedBox(width: 8),
-                Expanded(child: Text(ctl.thinkingText, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: NT.fCaption, color: c.muted))),
-              ]),
-            ),
-    );
-  }
-}
-
 /// “本次会话始终允许”已开启的提示条
 class _AutoBanner extends StatelessWidget {
   const _AutoBanner();
@@ -329,7 +305,6 @@ class _DesktopShellState extends State<_DesktopShell> {
             ]),
           ),
         ),
-        const _StatusLine(),
         Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 900),
@@ -495,7 +470,6 @@ class _CupertinoShell extends StatelessWidget {
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             const _AutoBanner(),
             const Expanded(child: MessageList()),
-            const _StatusLine(),
             Container(
               decoration: BoxDecoration(color: c.background, border: Border(top: BorderSide(color: c.line, width: .5))),
               padding: EdgeInsets.fromLTRB(8, 8, 8, 8 + MediaQuery.paddingOf(context).bottom),
@@ -546,7 +520,6 @@ class _MaterialShell extends StatelessWidget {
       body: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         const _AutoBanner(),
         const Expanded(child: MessageList()),
-        const _StatusLine(),
         SafeArea(top: false, child: Padding(padding: const EdgeInsets.fromLTRB(8, 4, 8, 8), child: const Composer())),
       ]),
     );
