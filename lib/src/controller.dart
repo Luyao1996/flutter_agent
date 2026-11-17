@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'api.dart';
 import 'config.dart';
+import 'group.dart';
 import 'models.dart';
 import 'voice/voice_call.dart';
 
@@ -107,6 +108,13 @@ class ChatController extends ChangeNotifier {
   /// 语音通话（用到时才建；没开通话时这些钩子都是空操作）
   VoiceCallController? _voice;
   VoiceCallController get voice => _voice ??= VoiceCallController(this);
+
+  /// 多人会话（群聊）：邀请、成员、实时推送（见 group.dart）
+  GroupRoom? _group;
+  GroupRoom get group => _group ??= GroupRoom(this);
+
+  /// 输入框的提示：有别人在线（群聊模式）时提示怎么跟人说话
+  String get inputHint => _group?.active == true ? groupPlaceholder : placeholder;
 
   /// 这一轮结束时给前台播报的“屏幕上列出的几个办法”
   List<String> get diagOptionTitles =>
@@ -352,6 +360,15 @@ class ChatController extends ChangeNotifier {
     if (c.error != null) return toast(c.error!);
     final o = c.opts!;
     if (o.text.isEmpty && o.attachments.isEmpty) return;
+    // 多人会话：默认交给 AI；只 @ 了群里的人（没叫 AI）的话只是群里聊天，AI 忙不忙都马上发出去
+    if (_group?.active == true && o.attachments.isEmpty && o.kbRefs.isEmpty && o.skillId == null && group.textToPeople(o.text)) {
+      final restore = clearComposer();
+      group.say(o.text).catchError((Object e) {
+        restore();
+        toast(e is ApiError ? e.message : '发送失败');
+      });
+      return;
+    }
     if (busy) {
       clearComposer();
       return enqueue(o);
@@ -375,7 +392,7 @@ class ChatController extends ChangeNotifier {
             : opts.summarize
                 ? 'AI 正在总结经验…'
                 : 'AI 正在处理…');
-    var started = false;
+    var started = false, waitOther = false;
     _streamCancel = Completer<void>();
     try {
       final body = {
@@ -393,20 +410,50 @@ class ChatController extends ChangeNotifier {
         'sessionId': sessionId,
         if (harnessId.isNotEmpty) 'harness': harnessId,
         'origin': config.baseUrl, // 后台用它生成公网下载链接（share_remote_file / download_url）
+        'clientId': group.clientId, // 多人会话：后台告诉群里其他页面有新任务时，按它认出是自己发起的
       };
       await for (final (e, d) in api.stream('/api/chat', body, cancel: _streamCancel!.future)) {
         started = true;
         _onLiveEvent(e, d);
       }
     } on ApiError catch (e) {
-      if (!started) onFail?.call();
-      _failLive(e.message);
+      // 多人会话里别人刚叫 AI 干上活：这条排到最前面，先一起看完那一轮
+      if (!started && e.status == 409 && _group?.active == true && e.message.contains('还有任务在执行') && !opts.diagnose && !opts.summarize) {
+        waitOther = true;
+        queue.insert(0, QueuedMessage(opts));
+      } else {
+        if (!started) onFail?.call();
+        _failLive(e.message);
+      }
     } catch (e) {
       if (!started) onFail?.call();
       _failLive('出错了：$e');
     } finally {
-      _endRun(opts.diagnose, opts.summarize);
+      if (waitOther) {
+        _setThinking(false);
+        _setBusy(false);
+        _attachRunning(quiet: true);
+      } else {
+        _endRun(opts.diagnose, opts.summarize);
+      }
     }
+  }
+
+  // ---------- 多人会话（group.dart 调用） ----------
+  /// 群里的一句话、自动发起的任务：记进对话记录，显示出来
+  void onRoomEvent(ChatEvent ev) {
+    if (!const {'chat', 'auto_task', 'auto_task_status'}.contains(ev.e)) return;
+    events.add(ev);
+    // 别人 @ 了我（主人）
+    if (ev.e == 'chat' && str(asMap(ev.d['from'])['id']) != 'owner' && asList(ev.d['mentions']).any((id) => id == 'owner' || id == 'all')) {
+      group.notifyAt(str(asMap(ev.d['from'])['name']).isEmpty ? '有人' : str(asMap(ev.d['from'])['name']));
+    }
+    _changed();
+  }
+
+  /// 别人叫 AI 干活了：连上去一起看
+  void onRoomTask() {
+    if (!busy && !_disposed && sessionId != null) _attachRunning(quiet: true);
   }
 
   /// 这一轮中途出错（连接断了等）：在这一轮里显示原因，并算作已结束（反馈、重新生成按钮照常出现）
@@ -429,7 +476,7 @@ class ChatController extends ChangeNotifier {
   }
 
   /// 打开时这个对话还有任务在执行：重新连上，先补上这一轮已有的内容，再接着实时显示
-  Future<void> _attachRunning() async {
+  Future<void> _attachRunning({bool quiet = false}) async {
     var diagnose = false, summarize = false, reload = false;
     _diagOptions = null;
     _kbSavedCount = 0;
@@ -448,7 +495,7 @@ class ChatController extends ChangeNotifier {
       // 任务刚好在这期间结束了：重新打开一次，把这一轮补上
       if (e.status == 409) {
         reload = true;
-      } else {
+      } else if (!quiet) {
         _failLive(e.message);
       }
     } finally {
@@ -568,6 +615,7 @@ class ChatController extends ChangeNotifier {
   void _onSession(Map<String, dynamic> d) {
     sessionId = d['sessionId'] as String?;
     _remember('session', sessionId);
+    group.follow(sessionId);
     if (str(d['title']).isNotEmpty) title = str(d['title']);
     autoApprove = d['autoApprove'] == true;
     sessionInfo = '对话进行中';
@@ -834,6 +882,7 @@ class ChatController extends ChangeNotifier {
     _remoteCalls.clear();
     sessionId = null;
     _remember('session', null);
+    _group?.follow(null);
     title = '';
     events.clear();
     selected = {};
@@ -874,6 +923,7 @@ class ChatController extends ChangeNotifier {
     showStartChoices = false;
     sessionId = id;
     _remember('session', id);
+    group.follow(id);
     final session = asMap(data['session']);
     final running = data['running'] == true;
     final runningTurn = data['runningTurn'];
@@ -1091,18 +1141,21 @@ class ChatController extends ChangeNotifier {
 
   Future<void> _loadMention() async {
     final seq = ++_mentionSeq;
+    // 多人会话的群成员和 AI（group.dart），排在最前面
+    final people = _group?.mentionItems(mentionQuery) ?? const [];
     List<dynamic> items;
     try {
       items = asList((await api.post('/api/kb/suggest', {'q': mentionQuery}))['items']);
     } catch (_) {
-      return closeMention();
+      if (people.isEmpty) return closeMention();
+      items = const [];
     }
     if (seq != _mentionSeq) return;
     const order = ['experience', 'background', 'skill'];
     final list = items.map(asMap).where((x) => !refs.any((r) => r.id == x['id']) && skill?.id != x['id']).toList()
       ..sort((a, b) => order.indexOf(str(a['type'])) - order.indexOf(str(b['type'])));
-    mentionItems = list.map(RefItem.fromJson).toList();
-    mentionSnippets = list.map((x) => str(x['snippet'])).toList();
+    mentionItems = [...people.map((p) => p.item), ...list.map(RefItem.fromJson)];
+    mentionSnippets = [...people.map((p) => p.snippet), ...list.map((x) => str(x['snippet']))];
     mentionIndex = 0;
     mentionOpen = true;
     notifyListeners();
@@ -1130,8 +1183,11 @@ class ChatController extends ChangeNotifier {
     final x = mentionItems[i];
     final end = input.selection.baseOffset.clamp(0, input.text.length);
     final start = _mentionStart.clamp(0, end);
-    input.value = TextEditingValue(text: input.text.replaceRange(start, end, ''), selection: TextSelection.collapsed(offset: start));
+    // @ 人：在文字里写上“@名字 ”
+    final ins = x.type == 'person' ? '@${x.title} ' : '';
+    input.value = TextEditingValue(text: input.text.replaceRange(start, end, ins), selection: TextSelection.collapsed(offset: start + ins.length));
     closeMention();
+    if (x.type == 'person') return notifyListeners();
     if (x.isSkill) {
       if (skill != null && skill!.id != x.id) toast('一条消息只能运行一个技能，已换成“${x.title}”');
       skill = x;
@@ -1162,6 +1218,7 @@ class ChatController extends ChangeNotifier {
     _disposed = true;
     _disconnectAllMachines();
     _voice?.dispose();
+    _group?.dispose();
     _cancelStream();
     queue.clear();
     _diagTimer?.cancel();

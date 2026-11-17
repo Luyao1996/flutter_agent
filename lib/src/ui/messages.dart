@@ -16,6 +16,7 @@ import '../panels/skills_panel.dart';
 import '../services.dart';
 import 'adaptive.dart';
 import 'attachments.dart';
+import 'group_view.dart';
 import 'markdown.dart';
 
 const _harnessNames = {'claude': 'Claude', 'codex': 'Codex', 'dsh': 'DeepSeek'};
@@ -422,6 +423,11 @@ class TurnView extends StatelessWidget {
           children.add(SysLine(text: '本轮结束${who == null ? '' : ' · $who'} · ${d['turns'] ?? '-'} 步$cost'));
         case 'error':
           children.add(ErrorBubble(str(d['error'])));
+        // 多人会话：群里的一句话、根据群聊自动发起的任务（状态 auto_task_status 显示在卡片上）
+        case 'chat':
+          children.add(GroupChatMessage(d));
+        case 'auto_task':
+          children.add(AutoTaskCard(d));
       }
     }
     // 正在生成、还没写完的这段
@@ -445,11 +451,13 @@ class _UserMessage extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = NetbarScope.of(context);
     final ctl = s.controller;
+    // 多人会话里别人叫 AI 的消息：靠左，上面写名字
+    final by = otherSender(t);
     final bubble = Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: BoxDecoration(
         color: NT.accentStrong,
-        borderRadius: BorderRadius.circular(18).copyWith(bottomRight: const Radius.circular(6)),
+        borderRadius: by != null ? BorderRadius.circular(18).copyWith(topLeft: const Radius.circular(6)) : BorderRadius.circular(18).copyWith(bottomRight: const Radius.circular(6)),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
         if (t.quote.isNotEmpty)
@@ -493,10 +501,11 @@ class _UserMessage extends StatelessWidget {
     }
 
     final branch = BranchNav(t);
-    return Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+    return Column(crossAxisAlignment: by != null ? CrossAxisAlignment.start : CrossAxisAlignment.end, children: [
+      if (by != null) Padding(padding: const EdgeInsets.only(bottom: 4), child: WhoLine(by, hint: t.user['auto'] != null ? '根据群聊自动发起' : '叫 AI 处理')),
       LayoutBuilder(
         builder: (ctx, box) => Align(
-          alignment: Alignment.centerRight,
+          alignment: by != null ? Alignment.centerLeft : Alignment.centerRight,
           child: ConstrainedBox(
             constraints: BoxConstraints(maxWidth: box.maxWidth * (s.isMobile ? .86 : .78)),
             child: s.isMobile
@@ -512,7 +521,7 @@ class _UserMessage extends StatelessWidget {
       ),
       // 电脑上消息下方一排按钮；手机上长按气泡操作，这里只留版本切换
       if (s.isDesktop)
-        Row(mainAxisAlignment: MainAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
+        Row(mainAxisAlignment: by != null ? MainAxisAlignment.start : MainAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
           AIconButton(
               icon: Icons.copy_outlined,
               tooltip: '复制',
@@ -841,7 +850,11 @@ class ApprovalCard extends StatelessWidget {
           const SizedBox(width: 5),
           Text(allowed ? '已允许' : '已拒绝', style: TextStyle(fontSize: NT.fSmall, fontWeight: FontWeight.w600, color: allowed ? c.okText : c.dangerText)),
         ]),
-        if (!allowed && reason.isNotEmpty) Text(reason, style: TextStyle(fontSize: NT.fCaption, color: c.muted)),
+        // 多人会话里写明是谁点的
+        if (str(result!['by']).isNotEmpty)
+          Text('${str(result!['by'])} 点的', style: TextStyle(fontSize: NT.fCaption, color: c.muted))
+        else if (!allowed && reason.isNotEmpty)
+          Text(reason, style: TextStyle(fontSize: NT.fCaption, color: c.muted)),
       ]);
     } else if (live) {
       footer = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

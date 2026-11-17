@@ -4,8 +4,85 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:netbar_ops/src/group.dart';
+
+/// 假的多人会话实时连接：记下发出去的消息，push 模拟后台推来的消息
+class FakeRoomSocket {
+  final _in = StreamController<dynamic>();
+  final sent = <Map<String, dynamic>>[];
+  bool closed = false;
+  void push(Map<String, dynamic> m) {
+    if (!closed) _in.add(jsonEncode(m));
+  }
+
+  void close() {
+    if (closed) return;
+    closed = true;
+    _in.close();
+  }
+
+  RoomSocket get socket => (stream: _in.stream, send: (String s) => sent.add(Map<String, dynamic>.from(jsonDecode(s) as Map)), close: close);
+}
 
 class FakeBackend {
+  /// 多人会话的实时连接都换成假的（不连网络）
+  FakeBackend() {
+    GroupRoom.defaultConnect = (url) {
+      final s = FakeRoomSocket();
+      roomSockets.add(s);
+      // 主人连上：回 hello 和当前成员
+      scheduleMicrotask(() {
+        s.push({
+          'type': 'hello',
+          'me': {'id': 'owner', 'name': ownerName, 'owner': true}
+        });
+        s.push(roomInfo());
+      });
+      return s.socket;
+    };
+  }
+
+  // ---------- 多人会话 ----------
+  final roomSockets = <FakeRoomSocket>[];
+  String ownerName = '房主';
+  Map<String, dynamic>? invite;
+
+  /// 被邀请进来的人：{id, name, online}
+  final guests = <Map<String, dynamic>>[];
+  final roomSays = <Map<String, dynamic>>[];
+
+  /// /api/sessions/get 返回的对话（不设就是空的）
+  Map<String, dynamic>? sessionData;
+
+  /// 下一次 /api/chat 回 409（别人刚叫 AI 干上活）
+  bool otherRunning = false;
+
+  Map<String, dynamic> roomInfo() => {
+        'type': 'presence',
+        'ownerName': ownerName,
+        'ownerOnline': true,
+        'invite': invite,
+        'members': [
+          {'id': 'owner', 'name': ownerName, 'owner': true, 'online': true},
+          for (final g in guests) {...g, 'joinedAt': 0},
+        ],
+      };
+
+  /// 推给所有连着的页面
+  void pushRoom(Map<String, dynamic> m) {
+    for (final s in roomSockets) {
+      s.push(m);
+    }
+  }
+
+  void pushPresence() => pushRoom(roomInfo());
+
+  /// 群里记一条事件（chat、auto_task、auto_task_status），接在最后一轮后面
+  void pushRoomEvent(String e, Map<String, dynamic> d) => pushRoom({
+        'type': 'event',
+        'ev': {'e': e, 'd': d, 't': 0, 'turn': 't$_turn'}
+      });
+
   final List<String> calls = [];
   final List<Map<String, dynamic>> chatBodies = [];
   final List<Map<String, dynamic>> events = [];
@@ -60,7 +137,15 @@ class FakeBackend {
           expireNext = false;
           return _json({'error': '连接已过期，请刷新页面重新连接。'}, 400);
         }
-        if (path == '/api/chat') return _chat(b);
+        if (path == '/api/chat') {
+          if (otherRunning) {
+            otherRunning = false;
+            return _json({'error': '这个对话还有任务在执行（可能在别的窗口里），请等它结束后再继续。'}, 409);
+          }
+          return _chat(b);
+        }
+        if (path.startsWith('/api/room/')) return _room(path, b);
+        if (path == '/api/sessions/get' && sessionData != null) return _json(sessionData!);
         if (path == '/api/upload') {
           return _json({
             'file': {'group': 'g', 'id': 'u${calls.length}', 'name': Uri.decodeComponent(req.headers['X-File-Name'] ?? ''), 'size': text.length, 'kind': 'text'}
@@ -97,6 +182,38 @@ class FakeBackend {
           _ => {'ok': true},
         });
       });
+
+  http.StreamedResponse _room(String path, Map<String, dynamic> b) {
+    switch (path) {
+      case '/api/room/say':
+        roomSays.add(b);
+        pushRoomEvent('chat', {
+          'from': {'id': 'owner', 'name': ownerName},
+          'text': b['text'],
+          if ((b['mentions'] as List).isNotEmpty) 'mentions': b['mentions'],
+        });
+        return _json({'ok': true});
+      case '/api/room/invite':
+        invite = b['action'] == 'close'
+            ? null
+            : {'code': 'abcdef0123456789abcdef01', 'createdAt': 0, 'expiresAt': b['expires'] == 'never' ? 0 : DateTime(2026, 11, 24, 10).millisecondsSinceEpoch};
+        if (b['action'] == 'close') guests.clear();
+        pushPresence();
+        return _json(roomInfo());
+      case '/api/room/kick':
+        guests.removeWhere((g) => g['id'] == b['memberId']);
+        pushPresence();
+        return _json(roomInfo());
+      case '/api/room/rename':
+        ownerName = '${b['name']}'.trim();
+        pushPresence();
+        return _json({'name': ownerName});
+      case '/api/room/cancel':
+        pushRoomEvent('auto_task_status', {'id': b['id'], 'status': 'cancelled', 'by': ownerName});
+        return _json({'ok': true});
+    }
+    return _json(roomInfo());
+  }
 
   http.StreamedResponse _json(Map<String, dynamic> d, [int status = 200]) =>
       http.StreamedResponse(Stream.value(utf8.encode(jsonEncode(d))), status, headers: {'content-type': 'application/json'});

@@ -1,20 +1,47 @@
-// 分享：生成只读的快照链接；手机上用系统分享面板发出去，电脑上复制链接
+// 分享：两个标签页——“邀请加入”（多人会话，见 invite_panel.dart）和“只读快照”（生成只读的快照链接）
+// 手机上用系统分享面板发出去，电脑上复制链接
 import 'package:flutter/material.dart';
 
 import '../api.dart';
 import '../models.dart';
 import '../services.dart';
 import '../ui/adaptive.dart';
+import 'invite_panel.dart';
 
-Future<void> openSharePanel(BuildContext context) => pushPanel(context, title: '分享对话', width: 560, height: 360, builder: (_) => const SharePanel());
+/// tab：invite 邀请加入 / snapshot 只读快照
+Future<void> openSharePanel(BuildContext context, {String tab = 'invite'}) =>
+    pushPanel(context, title: '分享对话', width: 560, height: 600, builder: (_) => SharePanel(tab: tab));
 
 class SharePanel extends StatefulWidget {
-  const SharePanel({super.key});
+  const SharePanel({super.key, this.tab = 'invite'});
+  final String tab;
   @override
   State<SharePanel> createState() => _SharePanelState();
 }
 
 class _SharePanelState extends State<SharePanel> {
+  late String _tab = widget.tab;
+
+  @override
+  Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
+          child: Align(
+              alignment: Alignment.centerLeft,
+              child: ASegmented<String>(value: _tab, segments: const {'invite': '邀请加入', 'snapshot': '只读快照'}, onChanged: (v) => setState(() => _tab = v))),
+        ),
+        Expanded(child: _tab == 'invite' ? const InvitePanel() : const SnapshotPanel()),
+      ]);
+}
+
+/// 只读快照：生成、更新、取消分享
+class SnapshotPanel extends StatefulWidget {
+  const SnapshotPanel({super.key});
+  @override
+  State<SnapshotPanel> createState() => _SnapshotPanelState();
+}
+
+class _SnapshotPanelState extends State<SnapshotPanel> {
   Map<String, dynamic>? _share;
   bool _loading = true, _working = false;
   String? _error;
